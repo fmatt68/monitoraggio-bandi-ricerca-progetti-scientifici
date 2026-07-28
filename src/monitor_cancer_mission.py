@@ -31,6 +31,12 @@ PREFISSO_TOPIC = (
     "HORIZON-MISS-2026-02-CANCER"
 )
 
+URL_BASE_TOPIC = (
+    "https://ec.europa.eu/info/"
+    "funding-tenders/opportunities/portal/"
+    "screen/opportunities/topic-details/"
+)
+
 
 def crea_sessione():
     """
@@ -60,6 +66,10 @@ def crea_sessione():
 def scarica_pagina(sessione, url):
     """
     Scarica la pagina ufficiale HaDEA.
+
+    Solleva un errore in caso di risposta HTTP
+    non valida, evitando la sovrascrittura
+    dell'archivio precedente.
     """
 
     risposta = sessione.get(
@@ -83,6 +93,9 @@ def pulisci_testo(testo):
     a capo ripetuti.
     """
 
+    if not testo:
+        return ""
+
     return " ".join(
         testo.split()
     )
@@ -90,13 +103,13 @@ def pulisci_testo(testo):
 
 def normalizza_testo(testo):
     """
-    Converte il testo in minuscolo ed elimina
-    accenti e spazi ripetuti.
+    Converte il testo in minuscolo, elimina
+    gli accenti e normalizza i trattini.
     """
 
     testo = unicodedata.normalize(
         "NFKD",
-        testo,
+        testo or "",
     )
 
     testo = "".join(
@@ -118,7 +131,7 @@ def normalizza_testo(testo):
 
 def normalizza_url(indirizzo):
     """
-    Converte un indirizzo relativo in URL assoluto
+    Converte un URL relativo in assoluto
     e rimuove parametri e frammenti.
     """
 
@@ -145,8 +158,10 @@ def normalizza_url(indirizzo):
 
 def estrai_testo_principale(html):
     """
-    Estrae il testo principale eliminando menu,
-    footer, script e altri elementi non informativi.
+    Estrae il testo principale della pagina.
+
+    Elimina menu, footer, script e altri elementi
+    che potrebbero interferire con l'estrazione.
     """
 
     soup = BeautifulSoup(
@@ -191,13 +206,17 @@ def estrai_valore_etichetta(
     etichette_successive,
 ):
     """
-    Estrae il valore che segue un'etichetta
-    della pagina HaDEA.
+    Estrae il valore che segue una specifica
+    etichetta nella pagina HaDEA.
 
     Esempio:
+
     Reference HORIZON-MISS-2026-02-CANCER
     Publication date 4 February 2026
     """
+
+    if not testo:
+        return None
 
     parti_finali = "|".join(
         re.escape(elemento)
@@ -222,14 +241,16 @@ def estrai_valore_etichetta(
     if not corrispondenza:
         return None
 
-    return pulisci_testo(
+    valore = pulisci_testo(
         corrispondenza.group(1)
     )
+
+    return valore or None
 
 
 def estrai_metadati_pagina(testo):
     """
-    Estrae i principali metadati dichiarati
+    Estrae i metadati principali dichiarati
     nella pagina ufficiale HaDEA.
     """
 
@@ -296,7 +317,9 @@ def estrai_metadati_pagina(testo):
         "data_apertura_testo": (
             data_apertura_testo
         ),
-        "modello_deadline": modello_deadline,
+        "modello_deadline": (
+            modello_deadline
+        ),
         "deadline_testo": deadline_testo,
     }
 
@@ -306,10 +329,11 @@ def interpreta_data(
     fine_giornata_se_senza_orario=False,
 ):
     """
-    Converte una data testuale in un oggetto datetime
+    Converte una data testuale in datetime
     con fuso orario europeo.
 
     Esempio:
+
     15 September 2026, 17:00 (CEST)
     """
 
@@ -379,7 +403,8 @@ def valuta_submission(
     """
     Determina lo stato effettivo della submission.
 
-    Possibili stati:
+    Stati possibili:
+
     - programmata;
     - aperta;
     - scaduta;
@@ -397,37 +422,60 @@ def valuta_submission(
                 "deadline_non_rilevata"
             ),
             "giorni_residui": None,
+            "giorni_all_apertura": None,
         }
+
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(
+            tzinfo=FUSO_ORARIO_EUROPA
+        )
 
     deadline_utc = deadline.astimezone(
         timezone.utc
     )
 
-    if (
-        data_apertura is not None
-        and adesso
-        < data_apertura.astimezone(timezone.utc)
-    ):
-        differenza = (
-            data_apertura.astimezone(timezone.utc)
-            - adesso
+    if data_apertura is not None:
+        if data_apertura.tzinfo is None:
+            data_apertura = (
+                data_apertura.replace(
+                    tzinfo=FUSO_ORARIO_EUROPA
+                )
+            )
+
+        data_apertura_utc = (
+            data_apertura.astimezone(
+                timezone.utc
+            )
         )
 
-        giorni_apertura = int(
-            differenza.total_seconds() // 86400
-        )
+        if adesso < data_apertura_utc:
+            differenza_apertura = (
+                data_apertura_utc - adesso
+            )
 
-        if differenza.total_seconds() % 86400:
-            giorni_apertura += 1
+            secondi_apertura = (
+                differenza_apertura.total_seconds()
+            )
 
-        return {
-            "submission_aperta": False,
-            "stato_submission": "programmata",
-            "giorni_residui": None,
-            "giorni_all_apertura": giorni_apertura,
-        }
+            giorni_apertura = int(
+                secondi_apertura // 86400
+            )
 
-    differenza = deadline_utc - adesso
+            if secondi_apertura % 86400:
+                giorni_apertura += 1
+
+            return {
+                "submission_aperta": False,
+                "stato_submission": "programmata",
+                "giorni_residui": None,
+                "giorni_all_apertura": (
+                    giorni_apertura
+                ),
+            }
+
+    differenza = (
+        deadline_utc - adesso
+    )
 
     secondi_residui = (
         differenza.total_seconds()
@@ -438,6 +486,7 @@ def valuta_submission(
             "submission_aperta": False,
             "stato_submission": "scaduta",
             "giorni_residui": 0,
+            "giorni_all_apertura": None,
         }
 
     giorni_residui = int(
@@ -451,13 +500,14 @@ def valuta_submission(
         "submission_aperta": True,
         "stato_submission": "aperta",
         "giorni_residui": giorni_residui,
+        "giorni_all_apertura": None,
     }
 
 
 def pulisci_titolo_topic(titolo):
     """
-    Elimina eventuale testo appartenente
-    alle sezioni successive.
+    Elimina dal titolo eventuale testo appartenente
+    alle sezioni successive della pagina.
     """
 
     indicatori_finali = [
@@ -473,6 +523,8 @@ def pulisci_titolo_topic(titolo):
         "Tags",
         "Relevant links",
         "Background",
+        "Publication date",
+        "Author",
     ]
 
     titolo_pulito = titolo
@@ -494,9 +546,10 @@ def pulisci_titolo_topic(titolo):
 
 def estrai_topics(testo):
     """
-    Estrae codici e titoli dei topic della call.
+    Estrae i codici e i titoli dei topic.
 
     Esempio:
+
     HORIZON-MISS-2026-02-CANCER-01:
     Virtual Human Twin Models for Cancer Research
     """
@@ -560,48 +613,25 @@ def estrai_topics(testo):
     return topics
 
 
-def trova_url_topic(
-    soup,
-    codice_topic,
-):
+def costruisci_url_topic(codice_topic):
     """
-    Cerca un collegamento diretto per il topic.
+    Costruisce il collegamento diretto al topic
+    nel Funding & Tenders Portal.
 
-    Se non esiste, utilizza la pagina generale HaDEA.
+    Il collegamento viene costruito dal codice,
+    evitando collegamenti generici come global-search.
     """
 
-    for link in soup.find_all(
-        "a",
-        href=True,
-    ):
-        testo_link = pulisci_testo(
-            link.get_text(
-                " ",
-                strip=True,
-            )
-        )
+    codice_pulito = codice_topic.strip().upper()
 
-        indirizzo = link.get(
-            "href",
-            "",
-        )
-
-        if (
-            codice_topic.lower()
-            in testo_link.lower()
-            or codice_topic.lower()
-            in indirizzo.lower()
-        ):
-            return normalizza_url(
-                indirizzo
-            )
-
-    return PAGINA_CALLS
+    return (
+        URL_BASE_TOPIC
+        + codice_pulito
+    )
 
 
 def costruisci_risultati(
-    html,
-    testo,
+    topics_estratti,
     metadati,
     valutazione,
     data_pubblicazione,
@@ -609,25 +639,27 @@ def costruisci_risultati(
     deadline,
 ):
     """
-    Costruisce l'elenco dei topic.
+    Costruisce l'elenco dei topic da salvare.
 
-    I topic vengono restituiti soltanto se la
-    submission risulta ancora aperta.
+    I topic vengono inclusi soltanto se
+    la submission è effettivamente aperta.
+
+    I giorni residui non vengono salvati nel JSON,
+    perché cambiano ogni giorno e produrrebbero
+    commit quotidiani non necessari.
     """
 
-    if not valutazione["submission_aperta"]:
+    if not valutazione[
+        "submission_aperta"
+    ]:
         return []
 
-    soup = BeautifulSoup(
-        html,
-        "html.parser",
-    )
-
-    topics_estratti = estrai_topics(
-        testo
-    )
-
     risultati = []
+
+    codice_call = (
+        metadati["riferimento"]
+        or PREFISSO_TOPIC
+    )
 
     for topic in topics_estratti:
         codice_topic = topic[
@@ -637,15 +669,11 @@ def costruisci_risultati(
         risultati.append(
             {
                 "fonte": FONTE,
-                "codice_call": (
-                    metadati["riferimento"]
-                    or PREFISSO_TOPIC
-                ),
+                "codice_call": codice_call,
                 "codice_topic": codice_topic,
                 "titolo": topic["titolo"],
-                "url": trova_url_topic(
-                    soup,
-                    codice_topic,
+                "url": costruisci_url_topic(
+                    codice_topic
                 ),
                 "pagina_fonte": PAGINA_CALLS,
                 "rilevanza": "oncologica",
@@ -671,12 +699,13 @@ def costruisci_risultati(
                 ),
                 "deadline": (
                     deadline.isoformat()
+                    if deadline
+                    else None
                 ),
                 "deadline_testo": (
-                    metadati["deadline_testo"]
-                ),
-                "giorni_residui": (
-                    valutazione["giorni_residui"]
+                    metadati[
+                        "deadline_testo"
+                    ]
                 ),
                 "modello_deadline": (
                     metadati[
@@ -686,12 +715,21 @@ def costruisci_risultati(
             }
         )
 
+    risultati.sort(
+        key=lambda elemento: (
+            elemento["codice_topic"]
+        )
+    )
+
     return risultati
 
 
 def carica_topics_precedenti():
     """
     Legge il JSON esistente.
+
+    Se il file non esiste o non è valido,
+    restituisce un elenco vuoto.
     """
 
     if not OUTPUT_FILE.exists():
@@ -773,8 +811,8 @@ def identifica_topics_rimossi(
     topics_correnti,
 ):
     """
-    Identifica i topic precedentemente attivi
-    che non risultano più nell'elenco corrente.
+    Identifica i topic precedentemente presenti
+    che non risultano più attivi.
     """
 
     codici_correnti = {
@@ -797,8 +835,11 @@ def identifica_topics_modificati(
     topics_correnti,
 ):
     """
-    Identifica variazioni a titolo, URL,
-    apertura, deadline o stato.
+    Identifica variazioni nei dati stabili
+    dei topic.
+
+    I giorni residui non vengono confrontati,
+    perché non sono salvati nel JSON.
     """
 
     precedenti_per_codice = {
@@ -813,6 +854,7 @@ def identifica_topics_modificati(
         "data_apertura",
         "deadline",
         "stato_submission",
+        "modello_deadline",
     ]
 
     modificati = []
@@ -867,10 +909,11 @@ def salva_risultati(
     totale_topics_pagina,
 ):
     """
-    Salva soltanto topic con submission aperta.
+    Salva solo informazioni stabili.
 
-    Se la call è scaduta, il JSON resta valido
-    ma l'elenco calls sarà vuoto.
+    Il numero dei giorni residui viene visualizzato
+    nel log e nel Job summary, ma non viene salvato,
+    evitando commit automatici quotidiani.
     """
 
     OUTPUT_FILE.parent.mkdir(
@@ -918,11 +961,6 @@ def salva_risultati(
         "modello_deadline": (
             metadati["modello_deadline"]
         ),
-        "giorni_residui": (
-            valutazione.get(
-                "giorni_residui"
-            )
-        ),
         "totale_topics_nella_pagina": (
             totale_topics_pagina
         ),
@@ -954,12 +992,48 @@ def formatta_data(data):
     if data is None:
         return "non rilevata"
 
+    if data.tzinfo is None:
+        data = data.replace(
+            tzinfo=FUSO_ORARIO_EUROPA
+        )
+
     data_locale = data.astimezone(
         FUSO_ORARIO_EUROPA
     )
 
     return data_locale.strftime(
         "%d/%m/%Y alle %H:%M %Z"
+    )
+
+
+def calcola_giorni_residui_da_iso(
+    deadline_iso,
+):
+    """
+    Calcola i giorni residui da una deadline ISO.
+
+    Il risultato viene calcolato al momento
+    dell'esecuzione e non viene salvato nel JSON.
+    """
+
+    if not deadline_iso:
+        return None
+
+    try:
+        deadline = datetime.fromisoformat(
+            deadline_iso
+        )
+
+    except ValueError:
+        return None
+
+    valutazione = valuta_submission(
+        None,
+        deadline,
+    )
+
+    return valutazione.get(
+        "giorni_residui"
     )
 
 
@@ -973,7 +1047,7 @@ def aggiungi_riepilogo_github(
     deadline,
 ):
     """
-    Aggiunge il riepilogo alla pagina
+    Aggiunge un riepilogo alla pagina
     dell'esecuzione GitHub Actions.
     """
 
@@ -984,17 +1058,42 @@ def aggiungi_riepilogo_github(
     if not percorso:
         return
 
+    riferimento = (
+        metadati["riferimento"]
+        or PREFISSO_TOPIC
+    )
+
+    stato_dichiarato = (
+        metadati["stato_dichiarato"]
+        or "non rilevato"
+    )
+
+    deadline_originale = (
+        metadati["deadline_testo"]
+        or "non rilevata"
+    )
+
+    giorni_residui = valutazione.get(
+        "giorni_residui"
+    )
+
+    giorni_visualizzati = (
+        str(giorni_residui)
+        if giorni_residui is not None
+        else "non applicabile"
+    )
+
     righe = [
         "# EU Mission on Cancer",
         "",
         (
             "Call monitorata: "
-            f"**{metadati['riferimento'] or PREFISSO_TOPIC}**"
+            f"**{riferimento}**"
         ),
         "",
         (
             "Stato dichiarato dalla fonte: "
-            f"**{metadati['stato_dichiarato'] or 'non rilevato'}**"
+            f"**{stato_dichiarato}**"
         ),
         "",
         (
@@ -1009,12 +1108,12 @@ def aggiungi_riepilogo_github(
         "",
         (
             "Deadline originale: "
-            f"**{metadati['deadline_testo'] or 'non rilevata'}**"
+            f"**{deadline_originale}**"
         ),
         "",
         (
             "Giorni residui: "
-            f"**{valutazione.get('giorni_residui')}**"
+            f"**{giorni_visualizzati}**"
         ),
         "",
         (
@@ -1061,7 +1160,7 @@ def aggiungi_riepilogo_github(
 
             righe.append(
                 f"  - Giorni residui: "
-                f"**{topic['giorni_residui']}**"
+                f"**{giorni_visualizzati}**"
             )
 
         righe.append("")
@@ -1069,10 +1168,28 @@ def aggiungi_riepilogo_github(
     else:
         righe.extend(
             [
-                "Nessun topic con submission aperta.",
+                "Nessun topic oncologico "
+                "con submission aperta.",
                 "",
             ]
         )
+
+    if nuovi_topics:
+        righe.extend(
+            [
+                "## Nuovi topic",
+                "",
+            ]
+        )
+
+        for topic in nuovi_topics:
+            righe.append(
+                f"- **{topic['codice_topic']}**: "
+                f"[{topic['titolo']}]"
+                f"({topic['url']})"
+            )
+
+        righe.append("")
 
     if topics_modificati:
         righe.extend(
@@ -1089,7 +1206,7 @@ def aggiungi_riepilogo_github(
 
             righe.append(
                 f"- **{topic['codice_topic']}**: "
-                f"{campi}"
+                f"campi modificati: {campi}"
             )
 
         righe.append("")
@@ -1103,12 +1220,34 @@ def aggiungi_riepilogo_github(
         )
 
         for topic in topics_rimossi:
+            codice = topic.get(
+                "codice_topic",
+                "Codice non disponibile",
+            )
+
+            titolo = topic.get(
+                "titolo",
+                "Titolo non disponibile",
+            )
+
             righe.append(
-                f"- **{topic.get('codice_topic')}**: "
-                f"{topic.get('titolo')}"
+                f"- **{codice}**: {titolo}"
             )
 
         righe.append("")
+
+    if (
+        not nuovi_topics
+        and not topics_modificati
+        and not topics_rimossi
+    ):
+        righe.extend(
+            [
+                "Nessuna variazione rispetto "
+                "all'esecuzione precedente.",
+                "",
+            ]
+        )
 
     with open(
         percorso,
@@ -1120,9 +1259,13 @@ def aggiungi_riepilogo_github(
         )
 
 
-def stampa_elenco(titolo, topics):
+def stampa_elenco(
+    titolo,
+    topics,
+):
     """
-    Stampa un elenco leggibile nel registro.
+    Stampa un elenco leggibile nel registro
+    del workflow.
     """
 
     print()
@@ -1137,37 +1280,58 @@ def stampa_elenco(titolo, topics):
         topics,
         start=1,
     ):
-        print(
-            f"{numero}. "
-            f"{topic.get('codice_topic')}"
+        codice = topic.get(
+            "codice_topic",
+            "Codice non disponibile",
+        )
+
+        titolo_topic = topic.get(
+            "titolo",
+            "Titolo non disponibile",
+        )
+
+        url = topic.get(
+            "url",
+            "URL non disponibile",
         )
 
         print(
-            f"   {topic.get('titolo')}"
+            f"{numero}. {codice}"
         )
 
         print(
-            f"   {topic.get('url')}"
+            f"   {titolo_topic}"
         )
 
-        deadline = topic.get(
+        print(
+            f"   {url}"
+        )
+
+        deadline_iso = topic.get(
             "deadline"
         )
 
-        if deadline:
-            data_deadline = (
-                datetime.fromisoformat(
-                    deadline
+        if deadline_iso:
+            try:
+                deadline = datetime.fromisoformat(
+                    deadline_iso
                 )
-            )
 
-            print(
-                "   Deadline: "
-                f"{formatta_data(data_deadline)}"
-            )
+                print(
+                    "   Deadline: "
+                    f"{formatta_data(deadline)}"
+                )
 
-        giorni_residui = topic.get(
-            "giorni_residui"
+            except ValueError:
+                print(
+                    "   Deadline non valida: "
+                    f"{deadline_iso}"
+                )
+
+        giorni_residui = (
+            calcola_giorni_residui_da_iso(
+                deadline_iso
+            )
         )
 
         if giorni_residui is not None:
@@ -1179,7 +1343,7 @@ def stampa_elenco(titolo, topics):
 
 def main():
     """
-    Funzione principale.
+    Funzione principale del monitor.
     """
 
     print("=" * 60)
@@ -1226,7 +1390,9 @@ def main():
         )
 
         deadline = interpreta_data(
-            metadati["deadline_testo"],
+            metadati[
+                "deadline_testo"
+            ],
             fine_giornata_se_senza_orario=True,
         )
 
@@ -1246,8 +1412,7 @@ def main():
             )
 
         topics_correnti = costruisci_risultati(
-            html,
-            testo,
+            topics_nella_pagina,
             metadati,
             valutazione,
             data_pubblicazione,
@@ -1262,6 +1427,19 @@ def main():
         print(
             "Errore durante il monitoraggio: "
             f"{errore}"
+        )
+
+        print(
+            "Il file precedente non verrà "
+            "sovrascritto."
+        )
+
+        raise SystemExit(1)
+
+    except Exception as errore:
+        print(
+            "Errore inatteso durante "
+            f"il monitoraggio: {errore}"
         )
 
         print(
@@ -1317,6 +1495,11 @@ def main():
     print(
         "Stato dichiarato: "
         f"{metadati['stato_dichiarato']}"
+    )
+
+    print(
+        "Data di pubblicazione: "
+        f"{formatta_data(data_pubblicazione)}"
     )
 
     print(
