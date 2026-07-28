@@ -1,7 +1,8 @@
-name: Monitoraggio bandi di ricerca
+name: Monitoraggio bandi di ricerca oncologica
 
 on:
   workflow_dispatch:
+
   schedule:
     - cron: "0 6 * * 1-5"
 
@@ -9,14 +10,14 @@ permissions:
   contents: write
 
 concurrency:
-  group: monitoraggio-bandi
+  group: monitoraggio-bandi-oncologici
   cancel-in-progress: false
 
 jobs:
   monitoraggio:
-    name: Controllo EP PerMed
+    name: Controllo call oncologiche
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Scarica il repository
@@ -30,40 +31,144 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
+      - name: Mostra la versione di Python
+        run: python --version
+
       - name: Aggiorna pip
         run: python -m pip install --upgrade pip
 
       - name: Installa le dipendenze
         run: python -m pip install -r requirements.txt
 
-      - name: Esegue il monitoraggio EP PerMed
+      - name: Esegue il monitoraggio oncologico EP PerMed
         run: python src/monitor.py
 
-      - name: Verifica il file generato
+      - name: Esegue il monitoraggio EU Mission on Cancer
+        run: python src/monitor_cancer_mission.py
+
+      - name: Verifica i file JSON generati
         shell: bash
         run: |
           set -euo pipefail
-          test -f data/ep_permed_calls.json
-          python -m json.tool data/ep_permed_calls.json > /dev/null
-          echo "File JSON presente e valido."
+
+          if [ ! -f "data/ep_permed_calls.json" ]; then
+            echo "Errore: data/ep_permed_calls.json non è stato creato."
+            exit 1
+          fi
+
+          if [ ! -f "data/eu_mission_cancer_calls.json" ]; then
+            echo "Errore: data/eu_mission_cancer_calls.json non è stato creato."
+            exit 1
+          fi
+
+          python -m json.tool \
+            data/ep_permed_calls.json \
+            > /dev/null
+
+          python -m json.tool \
+            data/eu_mission_cancer_calls.json \
+            > /dev/null
+
+          echo "I file JSON sono presenti e validi."
+
+      - name: Mostra un riepilogo dei file
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          files = [
+              Path("data/ep_permed_calls.json"),
+              Path("data/eu_mission_cancer_calls.json"),
+          ]
+
+          print("=" * 60)
+          print("RIEPILOGO DEI RISULTATI")
+          print("=" * 60)
+
+          for file_path in files:
+              with file_path.open(
+                  "r",
+                  encoding="utf-8",
+              ) as file:
+                  data = json.load(file)
+
+              source = data.get(
+                  "fonte",
+                  file_path.name,
+              )
+
+              count = data.get(
+                  "numero_risultati",
+                  len(data.get("calls", [])),
+              )
+
+              print()
+              print(f"Fonte: {source}")
+              print(f"File: {file_path}")
+              print(f"Risultati: {count}")
+
+              for item in data.get("calls", []):
+                  title = item.get(
+                      "titolo",
+                      "Titolo non disponibile",
+                  )
+
+                  url = item.get(
+                      "url",
+                      "URL non disponibile",
+                  )
+
+                  print(f"- {title}")
+                  print(f"  {url}")
+
+          print()
+          print("Riepilogo completato.")
+          PY
 
       - name: Configura Git
         shell: bash
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          set -euo pipefail
+
+          git config \
+            user.name \
+            "github-actions[bot]"
+
+          git config \
+            user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Registra gli eventuali aggiornamenti
         shell: bash
         run: |
           set -euo pipefail
+
           git add data/ep_permed_calls.json
+          git add data/eu_mission_cancer_calls.json
 
           if git diff --cached --quiet; then
             echo "Nessuna modifica da registrare."
             exit 0
           fi
 
-          git commit -m "Aggiorna monitoraggio EP PerMed"
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "Sono state rilevate modifiche nei risultati."
+
+          git diff --cached --stat
+
+          git commit \
+            -m "Aggiorna monitoraggio call oncologiche"
+
+          git pull \
+            --rebase \
+            origin \
+            "${GITHUB_REF_NAME}"
+
+          git push \
+            origin \
+            "HEAD:${GITHUB_REF_NAME}"
+
+          echo "Aggiornamenti salvati correttamente nel repository."
