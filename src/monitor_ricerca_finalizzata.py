@@ -41,11 +41,11 @@ OUTPUT_FILE = Path(
     "data/ricerca_finalizzata_calls.json"
 )
 
+REQUEST_DELAY_SECONDS = 0.5
+
 FUSO_ORARIO_ITALIA = ZoneInfo(
     "Europe/Rome"
 )
-
-REQUEST_DELAY_SECONDS = 0.5
 
 
 TERMINI_ONCOLOGICI = {
@@ -123,15 +123,14 @@ TERMINI_BANDO = {
 
 TERMINI_SUBMISSION = {
     "scadenza",
-    "termine",
+    "termine ultimo",
+    "termine per la presentazione",
     "deadline",
-    "presentazione",
-    "presentare",
-    "sottomissione",
+    "presentazione delle domande",
+    "presentazione delle proposte",
+    "presentazione dei progetti",
     "submission",
-    "domande",
-    "proposte",
-    "progetti",
+    "entro e non oltre",
 }
 
 
@@ -142,12 +141,11 @@ TERMINI_CHIUSURA = {
     "procedura chiusa",
     "termine scaduto",
     "termini scaduti",
-    "graduatoria",
-    "graduatorie",
     "progetti finanziati",
-    "esiti",
+    "graduatoria finale",
+    "graduatorie finali",
+    "esiti finali",
     "risultati finali",
-    "finanziati",
 }
 
 
@@ -219,6 +217,7 @@ def crea_sessione():
             "Accept-Language": (
                 "it-IT,it;q=0.9,en;q=0.7"
             ),
+            "Cache-Control": "no-cache",
         }
     )
 
@@ -293,35 +292,36 @@ def normalizza_url(indirizzo, pagina_base):
     )
 
 
-def pagina_bloccata(html):
+def trova_indicatori_blocco(html):
     """
-    Riconosce le pagine di verifica o blocco
-    restituite dalla protezione del sito.
+    Cerca gli indicatori delle pagine di protezione.
     """
 
+    soup = BeautifulSoup(
+        html,
+        "html.parser",
+    )
+
     testo = normalizza_testo(
-        BeautifulSoup(
-            html,
-            "html.parser",
-        ).get_text(
+        soup.get_text(
             " ",
             strip=True,
         )
     )
 
-    corrispondenze = [
+    return sorted(
         indicatore
         for indicatore in INDICATORI_BLOCCO
         if indicatore in testo
-    ]
-
-    return corrispondenze
+    )
 
 
 def scarica_pagina(sessione, url):
     """
-    Scarica una pagina e verifica che non si tratti
-    di una pagina di protezione automatica.
+    Scarica una pagina.
+
+    Se il sito restituisce la pagina di protezione
+    Gcore, genera un errore esplicito.
     """
 
     risposta = sessione.get(
@@ -332,15 +332,15 @@ def scarica_pagina(sessione, url):
 
     risposta.raise_for_status()
 
-    blocchi = pagina_bloccata(
+    indicatori = trova_indicatori_blocco(
         risposta.text
     )
 
-    if blocchi:
+    if indicatori:
         raise RuntimeError(
             "Il sito ha restituito una pagina "
             "di verifica o protezione: "
-            + ", ".join(blocchi)
+            + ", ".join(indicatori)
         )
 
     print(
@@ -430,7 +430,8 @@ def estrai_titolo(html):
             flags=re.IGNORECASE,
         )
 
-        return titolo
+        if titolo:
+            return titolo
 
     return "Bando Ricerca Finalizzata"
 
@@ -486,10 +487,7 @@ def trova_parole_oncologiche(testo):
     )
 
 
-def collegamento_candidato(
-    titolo,
-    indirizzo,
-):
+def collegamento_candidato(titolo, indirizzo):
     """
     Verifica se un collegamento può rappresentare
     una pagina relativa alla Ricerca Finalizzata.
@@ -512,21 +510,15 @@ def collegamento_candidato(
     if "ricerca-finalizzata" in testo:
         return True
 
-    if (
-        "ricerca finalizzata" in testo
-        and "bando" in testo
-    ):
+    if "ricerca finalizzata" in testo:
         return True
 
     return False
 
 
-def estrai_pagine_candidate(
-    html,
-    pagina_base,
-):
+def estrai_pagine_candidate(html, pagina_base):
     """
-    Estrae le pagine candidate dalla pagina indice.
+    Estrae le pagine candidate da una pagina indice.
     """
 
     soup = BeautifulSoup(
@@ -579,15 +571,17 @@ def estrai_pagine_candidate(
 def raccogli_pagine_candidate(sessione):
     """
     Controlla le pagine indice e raccoglie
-    i collegamenti ai bandi.
+    i possibili bandi.
 
-    Le pagine conosciute vengono aggiunte come fallback.
+    Le pagine conosciute vengono aggiunte come fallback,
+    ma devono comunque risultare realmente accessibili
+    durante la fase di analisi.
     """
 
     risultati = []
     url_visti = set()
-    pagine_indice_accessibili = 0
-    errori = []
+    indici_accessibili = 0
+    errori_indice = []
 
     for pagina in PAGINE_INDICE:
         print()
@@ -601,7 +595,7 @@ def raccogli_pagine_candidate(sessione):
                 pagina,
             )
 
-            pagine_indice_accessibili += 1
+            indici_accessibili += 1
 
             candidati = estrai_pagine_candidate(
                 html,
@@ -609,11 +603,13 @@ def raccogli_pagine_candidate(sessione):
             )
 
             for candidato in candidati:
-                if candidato["url"] in url_visti:
+                url = candidato["url"]
+
+                if url in url_visti:
                     continue
 
                 url_visti.add(
-                    candidato["url"]
+                    url
                 )
 
                 risultati.append(
@@ -628,7 +624,7 @@ def raccogli_pagine_candidate(sessione):
                 f"{pagina}: {errore}"
             )
 
-            errori.append(
+            errori_indice.append(
                 messaggio
             )
 
@@ -654,25 +650,16 @@ def raccogli_pagine_candidate(sessione):
             }
         )
 
-    if (
-        pagine_indice_accessibili == 0
-        and not risultati
-    ):
-        raise RuntimeError(
-            "Nessuna pagina del Ministero "
-            "è risultata accessibile."
-        )
-
     return (
         risultati,
-        pagine_indice_accessibili,
-        errori,
+        indici_accessibili,
+        errori_indice,
     )
 
 
 def estrai_stringhe_data(testo):
     """
-    Estrae stringhe che rappresentano date.
+    Estrae le stringhe che rappresentano date.
     """
 
     risultati = []
@@ -716,10 +703,9 @@ def calcola_punteggio_deadline(contesto):
         "presentazione delle domande": 30,
         "termine ultimo": 35,
         "entro e non oltre": 35,
-        "deadline": 30,
         "submission deadline": 40,
+        "deadline": 30,
         "scadenza": 20,
-        "termine": 10,
         "presentazione": 10,
         "submission": 10,
     }
@@ -787,9 +773,7 @@ def estrai_candidati_deadline(testo):
             for stringa_data in date:
                 candidati.append(
                     {
-                        "stringa_data": (
-                            stringa_data
-                        ),
+                        "stringa_data": stringa_data,
                         "contesto": contesto,
                         "punteggio": (
                             calcola_punteggio_deadline(
@@ -826,8 +810,8 @@ def interpreta_data(stringa_data):
     """
     Converte una data testuale in datetime.
 
-    Se non è riportato un orario,
-    viene utilizzata la fine della giornata.
+    Se non è presente un orario, viene utilizzata
+    la fine della giornata.
     """
 
     contiene_orario = bool(
@@ -934,9 +918,6 @@ def estrai_deadline(testo):
         "deadline_testo": (
             migliore["stringa_data"]
         ),
-        "deadline_contesto": (
-            migliore["contesto"]
-        ),
         "deadline_affidabilita": (
             migliore["punteggio"]
         ),
@@ -1008,36 +989,33 @@ def valuta_deadline(deadline_iso):
     }
 
 
-def pagina_dichiarata_chiusa(testo):
+def trova_indicatori_chiusura(testo):
     """
-    Cerca indicatori espliciti di chiusura
-    o conclusione del bando.
+    Cerca indicatori espliciti della conclusione
+    del bando.
     """
 
     testo_normalizzato = normalizza_testo(
         testo
     )
 
-    indicatori = [
+    return sorted(
         termine
         for termine in TERMINI_CHIUSURA
         if normalizza_testo(termine)
         in testo_normalizzato
-    ]
-
-    return sorted(
-        indicatori
     )
 
 
 def analizza_candidati(sessione, candidati):
     """
-    Analizza i possibili bandi.
+    Analizza le pagine candidate.
 
-    Vengono salvati solo quelli:
+    Vengono salvati soltanto bandi:
+    - effettivamente accessibili;
+    - relativi alla ricerca;
     - pertinenti all'oncologia;
     - non dichiarati conclusi;
-    - con deadline rilevata;
     - con deadline futura.
     """
 
@@ -1046,13 +1024,16 @@ def analizza_candidati(sessione, candidati):
     statistiche = {
         "candidate": len(candidati),
         "pagine_accessibili": 0,
-        "pagine_bloccate": 0,
+        "pagine_non_analizzabili": 0,
+        "non_bandi": 0,
         "non_pertinenti": 0,
         "dichiarate_chiuse": 0,
         "scadute": 0,
         "deadline_non_rilevate": 0,
         "deadline_non_valide": 0,
     }
+
+    errori_pagine = []
 
     for numero, candidato in enumerate(
         candidati,
@@ -1075,8 +1056,16 @@ def analizza_candidati(sessione, candidati):
             RuntimeError,
         ) as errore:
             statistiche[
-                "pagine_bloccate"
+                "pagine_non_analizzabili"
             ] += 1
+
+            messaggio = (
+                f"{candidato['url']}: {errore}"
+            )
+
+            errori_pagine.append(
+                messaggio
+            )
 
             print(
                 "  Pagina non analizzabile: "
@@ -1105,6 +1094,10 @@ def analizza_candidati(sessione, candidati):
             testo_completo,
             TERMINI_BANDO,
         ):
+            statistiche[
+                "non_bandi"
+            ] += 1
+
             print(
                 "  Esclusa: la pagina non sembra "
                 "riguardare un bando."
@@ -1131,7 +1124,7 @@ def analizza_candidati(sessione, candidati):
             continue
 
         indicatori_chiusura = (
-            pagina_dichiarata_chiusa(
+            trova_indicatori_chiusura(
                 testo_completo
             )
         )
@@ -1271,6 +1264,7 @@ def analizza_candidati(sessione, candidati):
     return (
         risultati,
         statistiche,
+        errori_pagine,
     )
 
 
@@ -1327,12 +1321,9 @@ def carica_risultati_precedenti():
         return []
 
 
-def identifica_nuove_calls(
-    precedenti,
-    correnti,
-):
+def identifica_nuove_calls(precedenti, correnti):
     """
-    Identifica i nuovi bandi in base all'URL.
+    Identifica i nuovi bandi sulla base dell'URL.
     """
 
     url_precedenti = {
@@ -1348,10 +1339,7 @@ def identifica_nuove_calls(
     ]
 
 
-def identifica_calls_rimosse(
-    precedenti,
-    correnti,
-):
+def identifica_calls_rimosse(precedenti, correnti):
     """
     Identifica i bandi non più attivi.
     """
@@ -1370,10 +1358,7 @@ def identifica_calls_rimosse(
     ]
 
 
-def identifica_calls_modificate(
-    precedenti,
-    correnti,
-):
+def identifica_calls_modificate(precedenti, correnti):
     """
     Identifica modifiche ai dati stabili.
     """
@@ -1411,12 +1396,8 @@ def identifica_calls_modificate(
         if campi_modificati:
             modificati.append(
                 {
-                    "titolo": corrente[
-                        "titolo"
-                    ],
-                    "url": corrente[
-                        "url"
-                    ],
+                    "titolo": corrente["titolo"],
+                    "url": corrente["url"],
                     "campi_modificati": (
                         campi_modificati
                     ),
@@ -1426,15 +1407,10 @@ def identifica_calls_modificate(
     return modificati
 
 
-def salva_risultati(
-    risultati,
-    statistiche,
-):
+def salva_risultati(risultati, statistiche):
     """
-    Salva il JSON stabile.
-
-    I giorni residui non vengono salvati,
-    così non si creano commit quotidiani.
+    Salva il JSON soltanto dopo che almeno
+    una pagina è stata realmente analizzata.
     """
 
     OUTPUT_FILE.parent.mkdir(
@@ -1448,6 +1424,7 @@ def salva_risultati(
         "criterio": (
             "oncologia e submission non scaduta"
         ),
+        "monitoraggio_completato": True,
         "totale_pagine_candidate": (
             statistiche["candidate"]
         ),
@@ -1455,7 +1432,12 @@ def salva_risultati(
             statistiche["pagine_accessibili"]
         ),
         "totale_pagine_non_analizzabili": (
-            statistiche["pagine_bloccate"]
+            statistiche[
+                "pagine_non_analizzabili"
+            ]
+        ),
+        "totale_non_bandi": (
+            statistiche["non_bandi"]
         ),
         "totale_non_pertinenti": (
             statistiche["non_pertinenti"]
@@ -1471,6 +1453,11 @@ def salva_risultati(
         "totale_deadline_non_rilevate": (
             statistiche[
                 "deadline_non_rilevate"
+            ]
+        ),
+        "totale_deadline_non_valide": (
+            statistiche[
+                "deadline_non_valide"
             ]
         ),
         "numero_risultati": len(
@@ -1521,9 +1508,7 @@ def formatta_deadline(deadline_iso):
     )
 
 
-def calcola_giorni_residui(
-    deadline_iso,
-):
+def calcola_giorni_residui(deadline_iso):
     """
     Calcola i giorni residui senza salvarli nel JSON.
     """
@@ -1544,6 +1529,7 @@ def aggiungi_riepilogo_github(
     calls_modificate,
     statistiche,
     errori_indice,
+    errori_pagine,
 ):
     """
     Aggiunge il riepilogo al Job summary.
@@ -1565,13 +1551,18 @@ def aggiungi_riepilogo_github(
         ),
         "",
         (
-            "Pagine candidate analizzate: "
+            "Pagine candidate: "
             f"**{statistiche['candidate']}**"
         ),
         "",
         (
+            "Pagine realmente analizzate: "
+            f"**{statistiche['pagine_accessibili']}**"
+        ),
+        "",
+        (
             "Pagine non analizzabili: "
-            f"**{statistiche['pagine_bloccate']}**"
+            f"**{statistiche['pagine_non_analizzabili']}**"
         ),
         "",
         (
@@ -1645,7 +1636,12 @@ def aggiungi_riepilogo_github(
             ]
         )
 
-    if errori_indice:
+    errori = (
+        errori_indice
+        + errori_pagine
+    )
+
+    if errori:
         righe.extend(
             [
                 "## Avvisi tecnici",
@@ -1653,7 +1649,7 @@ def aggiungi_riepilogo_github(
             ]
         )
 
-        for errore in errori_indice:
+        for errore in errori:
             righe.append(
                 f"- {errore}"
             )
@@ -1755,24 +1751,59 @@ def main():
         (
             risultati,
             statistiche,
+            errori_pagine,
         ) = analizza_candidati(
             sessione,
             candidati,
         )
 
+        if statistiche[
+            "pagine_accessibili"
+        ] == 0:
+            raise RuntimeError(
+                "Nessuna pagina della Ricerca "
+                "Finalizzata è stata realmente "
+                "analizzabile. Il sito del Ministero "
+                "ha bloccato tutte le richieste. "
+                "L'archivio precedente non verrà "
+                "sovrascritto."
+            )
+
     except (
         requests.RequestException,
         RuntimeError,
     ) as errore:
+        print()
         print(
-            "Errore durante il monitoraggio: "
+            "Monitoraggio non completato: "
             f"{errore}"
         )
 
         print(
-            "Il file precedente non verrà "
+            "Il precedente archivio non verrà "
             "sovrascritto."
         )
+
+        percorso_riepilogo = os.environ.get(
+            "GITHUB_STEP_SUMMARY"
+        )
+
+        if percorso_riepilogo:
+            with open(
+                percorso_riepilogo,
+                "a",
+                encoding="utf-8",
+            ) as file:
+                file.write(
+                    "# Ricerca Finalizzata\n\n"
+                    "Stato del monitor: "
+                    "**non completato**\n\n"
+                    "Il sito del Ministero ha impedito "
+                    "l'analisi delle pagine. "
+                    "L'archivio precedente non è stato "
+                    "sovrascritto.\n\n"
+                    f"Dettaglio: {errore}\n"
+                )
 
         raise SystemExit(1)
 
@@ -1805,6 +1836,7 @@ def main():
         calls_modificate,
         statistiche,
         errori_indice,
+        errori_pagine,
     )
 
     print()
@@ -1814,8 +1846,13 @@ def main():
     )
 
     print(
-        "Bandi non pertinenti: "
-        f"{statistiche['non_pertinenti']}"
+        "Pagine realmente analizzate: "
+        f"{statistiche['pagine_accessibili']}"
+    )
+
+    print(
+        "Pagine non analizzabili: "
+        f"{statistiche['pagine_non_analizzabili']}"
     )
 
     print(
@@ -1829,13 +1866,13 @@ def main():
     )
 
     print(
-        "Deadline non rilevate: "
-        f"{statistiche['deadline_non_rilevate']}"
+        "Bandi non pertinenti: "
+        f"{statistiche['non_pertinenti']}"
     )
 
     print(
-        "Pagine non analizzabili: "
-        f"{statistiche['pagine_bloccate']}"
+        "Deadline non rilevate: "
+        f"{statistiche['deadline_non_rilevate']}"
     )
 
     print(
