@@ -2,22 +2,68 @@ name: Monitoraggio bandi di ricerca
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1-5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: monitoraggio-bandi
+  cancel-in-progress: false
 
 jobs:
-  prova:
+  monitoraggio:
+    name: Controllo EP PerMed
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
-      - name: Scarica il contenuto del repository
+      - name: Scarica il repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Configura Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
 
-      - name: Controlla la versione di Python
-        run: python --version
+      - name: Aggiorna pip
+        run: python -m pip install --upgrade pip
 
-      - name: Messaggio di prova
-        run: echo "Il workflow per il monitoraggio dei bandi funziona correttamente."
+      - name: Installa le dipendenze
+        run: python -m pip install -r requirements.txt
+
+      - name: Esegue il monitoraggio EP PerMed
+        run: python src/monitor.py
+
+      - name: Verifica il file generato
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f data/ep_permed_calls.json
+          python -m json.tool data/ep_permed_calls.json > /dev/null
+          echo "File JSON presente e valido."
+
+      - name: Configura Git
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Registra gli eventuali aggiornamenti
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add data/ep_permed_calls.json
+
+          if git diff --cached --quiet; then
+            echo "Nessuna modifica da registrare."
+            exit 0
+          fi
+
+          git commit -m "Aggiorna monitoraggio EP PerMed"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
