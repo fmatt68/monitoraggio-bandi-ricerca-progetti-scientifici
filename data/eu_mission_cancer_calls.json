@@ -1,0 +1,109 @@
+{
+  "fonte": "EU Mission on Cancer",
+  "pagina_monitorata": "https://hadea.ec.europa.eu/calls-proposals/cancer-mission-calls-2026_en",
+  "criterio": "oncologia",
+  "codice_call": "HORIZON-MISS-2026-02-CANCER",
+  "stato": "aperta",
+  "scadenza": "2026-09-15T17:00:00+02:00",
+  "numero_risultati": 7,
+  "calls": [
+    {
+      "fonte": "EU Mission on Cancer",
+      "codice_call": "HORIZON-MISS-2026-02-CANCER",
+      "codice_topic": "HORIZON-MISS-2026-02-CANCER-01",
+      "titolo": "Virtual Human Twin (VHT) Models for Cancer Research",
+      "url": "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/topic-details/HORIZON-MISS-2026-02-CANCER-01",
+      "pagina_fonte": "https://hadea.ec.europa.eu/calls-proposals/cancer-mission-calls-2026_en",
+      "stato": "aperta",
+      "scadenza": "2026-09-15T17:00:00+02:00",
+      "rilevanza": "oncologica",
+      "parole_chiave_oncologiche": [
+        "cancer"
+      ]
+    },
+    {
+      "fonte": "EU Mission on Cancer",
+      "codice_call": "HORIZON-MISS-2026-02-CANCER",
+      "codice_topic": "HORIZON-MISS-2026-02-CANCER-02",
+      "titolo": "Microbiome for early cancer prediction before the onset of disease",
+      "url": "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/topic-details/HORIZON-MISS-2026-02-CANCER-02",
+      "pagina_fonte": "https://hadea.ec.europa.eu/calls-proposals/cancer-mission-calls-2026_en",
+      "stato": "aperta",
+      "scadenza": "2026-09-15T17:00:00+02:00",
+      "rilevanza": "oncologica",
+      "parole_chiave_oncologiche": [
+        "cancer"
+      ]
+    },
+    {
+      "fonte": "EU Mission on Cancer",
+      "codice_call": "HORIZON-MISS-2026-02-CANCER",
+      "codice_topic": "HORIZON-MISS-2026-02-CANCER-03",
+      "titolo": "Pragmatic clinical trials to optimise immunotherapeutic interventions for patients with refractory cancers",
+      "url": "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/topic-details/HORIZON-MISS-2026-02-CANCER-03",
+      "pagina_fonte": "https://hadea.ec.europa.eu/calls-proposals/cancer-mission-calls-2026_en",
+      "stato": "aperta",
+      "scadenza": "2026-09-15T17:00:00+02:00",
+      "rilevanza": "oncologica",
+      "parole_chiave_oncologiche": [
+        "cancer"
+      ]
+    },
+    {
+      "fonte": "EU Mission on Cancer",
+      "codice_call": "HORIZON-MISS-2026-02-CANCER",
+      "codice_topic": "HORIZON-MISS-2026-02-CANCER-04",
+      "titolo": "Earlier and more precise palliative care",
+      "url": "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/topic-details/HORIZON-MISS-2026-02-CANCER-04",
+      "pagina_fonte": "https://hadea.ec.europa.eu/calls-proposals/cancer-mission-calls-2026_en",
+      "stato": "aperta",
+      "scadenza": "2026-09-15T17:00:00+02:00",
+      "rilevanza": "oncologica",
+      "parole_chiave_oncologiche": [
+        "cancer"
+      ]
+    },
+    {
+      "fonte": "EU Mission on Cancer",
+      "codice_call": "HORIZON-MISS-2026-02-CANCER",
+      "codice_topic": "HORIZON-MISS-2026-02-CANCER-05",
+      "titolo": "Boosting mental health of young cancer survivors through the European Cancer Patient Digital Centre (ECPDC)",
+      "url": "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/topic-details/HORIZON-MISS-2026-02-CANCER-05",
+      "pagina_fonte": "https://hadea.ec.europa.eu/calls-proposals/cancer-mission-calls-2026_en",
+      "stato": "aperta",
+      "scadenza": "2026-09-15T17:00:00+02:00",
+      "rilevanza": "oncologica",
+      "parole_chiave_oncologiche": [
+        "cancer"
+      ]
+    },
+    {
+      "fonte": "EU Mission on Cancer",
+      "codice_call": "HORIZON-MISS-2026-02-CANCER",
+      "codice_topic": "HORIZON-MISS-2026-02-CANCER-06",
+      "titolo": "Development of a research capacity building programme on cancer with and for Ukraine",
+      "url": "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/global-search",
+      "pagina_fonte": "https://hadea.ec.europa.eu/calls-proposals/cancer-mission-calls-2026_en",
+      "stato": "aperta",
+      "scadenza": "2026-09-15T17:00:00+02:00",
+      "rilevanza": "oncologica",
+      "parole_chiave_oncologiche": [
+        "cancer"
+      ]
+    },
+    {
+      "fonte": "EU Mission on Cancer",
+      "codice_call": "HORIZON-MISS-2026-02-CANCER",
+      "codice_topic": "HORIZON-MISS-2026-02-CANCER-07",
+      "titolo": "Improve the Quality of Life of older cancer patients",
+      "url": "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/topic-details/HORIZON-MISS-2026-02-CANCER-07",
+      "pagina_fonte": "https://hadea.ec.europa.eu/calls-proposals/cancer-mission-calls-2026_en",
+      "stato": "aperta",
+      "scadenza": "2026-09-15T17:00:00+02:00",
+      "rilevanza": "oncologica",
+      "parole_chiave_oncologiche": [
+        "cancer"
+      ]
+    }
+  ]
+}
