@@ -1,9 +1,13 @@
 import json
 import os
 import re
+import unicodedata
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, urlunparse
+from zoneinfo import ZoneInfo
 
+import dateparser
 import requests
 from bs4 import BeautifulSoup
 
@@ -19,11 +23,13 @@ OUTPUT_FILE = Path(
     "data/eu_mission_cancer_calls.json"
 )
 
-CODICE_CALL = "HORIZON-MISS-2026-02-CANCER"
+FUSO_ORARIO_EUROPA = ZoneInfo(
+    "Europe/Rome"
+)
 
-SCADENZA = "2026-09-15T17:00:00+02:00"
-
-STATO = "aperta"
+PREFISSO_TOPIC = (
+    "HORIZON-MISS-2026-02-CANCER"
+)
 
 
 def crea_sessione():
@@ -53,8 +59,7 @@ def crea_sessione():
 
 def scarica_pagina(sessione, url):
     """
-    Scarica una pagina e interrompe il programma
-    in caso di errore HTTP.
+    Scarica la pagina ufficiale HaDEA.
     """
 
     risposta = sessione.get(
@@ -65,7 +70,7 @@ def scarica_pagina(sessione, url):
     risposta.raise_for_status()
 
     print(
-        f"Pagina scaricata correttamente: "
+        "Pagina scaricata correttamente: "
         f"HTTP {risposta.status_code}"
     )
 
@@ -78,12 +83,42 @@ def pulisci_testo(testo):
     a capo ripetuti.
     """
 
-    return " ".join(testo.split())
+    return " ".join(
+        testo.split()
+    )
+
+
+def normalizza_testo(testo):
+    """
+    Converte il testo in minuscolo ed elimina
+    accenti e spazi ripetuti.
+    """
+
+    testo = unicodedata.normalize(
+        "NFKD",
+        testo,
+    )
+
+    testo = "".join(
+        carattere
+        for carattere in testo
+        if not unicodedata.combining(
+            carattere
+        )
+    )
+
+    testo = testo.lower()
+    testo = testo.replace("–", "-")
+    testo = testo.replace("—", "-")
+
+    return pulisci_testo(
+        testo
+    )
 
 
 def normalizza_url(indirizzo):
     """
-    Converte un URL relativo in un URL assoluto
+    Converte un indirizzo relativo in URL assoluto
     e rimuove parametri e frammenti.
     """
 
@@ -110,9 +145,8 @@ def normalizza_url(indirizzo):
 
 def estrai_testo_principale(html):
     """
-    Estrae il testo informativo della pagina,
-    eliminando menu, script, footer e altri
-    elementi non rilevanti.
+    Estrae il testo principale eliminando menu,
+    footer, script e altri elementi non informativi.
     """
 
     soup = BeautifulSoup(
@@ -128,6 +162,7 @@ def estrai_testo_principale(html):
         "nav",
         "footer",
         "header",
+        "form",
     ]
 
     for elemento in soup(
@@ -150,16 +185,389 @@ def estrai_testo_principale(html):
     )
 
 
+def estrai_valore_etichetta(
+    testo,
+    etichetta,
+    etichette_successive,
+):
+    """
+    Estrae il valore che segue un'etichetta
+    della pagina HaDEA.
+
+    Esempio:
+    Reference HORIZON-MISS-2026-02-CANCER
+    Publication date 4 February 2026
+    """
+
+    parti_finali = "|".join(
+        re.escape(elemento)
+        for elemento in etichette_successive
+    )
+
+    schema = (
+        re.escape(etichetta)
+        + r"\s+"
+        + r"(.+?)"
+        + r"(?=\s+(?:"
+        + parti_finali
+        + r")\s+|$)"
+    )
+
+    corrispondenza = re.search(
+        schema,
+        testo,
+        flags=re.IGNORECASE,
+    )
+
+    if not corrispondenza:
+        return None
+
+    return pulisci_testo(
+        corrispondenza.group(1)
+    )
+
+
+def estrai_metadati_pagina(testo):
+    """
+    Estrae i principali metadati dichiarati
+    nella pagina ufficiale HaDEA.
+    """
+
+    etichette = [
+        "Status",
+        "Reference",
+        "Publication date",
+        "Opening date",
+        "Deadline model",
+        "Deadline date",
+        "Funding programme",
+        "Programme Sector",
+        "Programme",
+        "Tags",
+        "Description",
+    ]
+
+    stato_dichiarato = estrai_valore_etichetta(
+        testo,
+        "Status",
+        etichette[1:],
+    )
+
+    riferimento = estrai_valore_etichetta(
+        testo,
+        "Reference",
+        etichette[2:],
+    )
+
+    data_pubblicazione_testo = (
+        estrai_valore_etichetta(
+            testo,
+            "Publication date",
+            etichette[3:],
+        )
+    )
+
+    data_apertura_testo = (
+        estrai_valore_etichetta(
+            testo,
+            "Opening date",
+            etichette[4:],
+        )
+    )
+
+    modello_deadline = estrai_valore_etichetta(
+        testo,
+        "Deadline model",
+        etichette[5:],
+    )
+
+    deadline_testo = estrai_valore_etichetta(
+        testo,
+        "Deadline date",
+        etichette[6:],
+    )
+
+    return {
+        "stato_dichiarato": stato_dichiarato,
+        "riferimento": riferimento,
+        "data_pubblicazione_testo": (
+            data_pubblicazione_testo
+        ),
+        "data_apertura_testo": (
+            data_apertura_testo
+        ),
+        "modello_deadline": modello_deadline,
+        "deadline_testo": deadline_testo,
+    }
+
+
+def interpreta_data(
+    stringa_data,
+    fine_giornata_se_senza_orario=False,
+):
+    """
+    Converte una data testuale in un oggetto datetime
+    con fuso orario europeo.
+
+    Esempio:
+    15 September 2026, 17:00 (CEST)
+    """
+
+    if not stringa_data:
+        return None
+
+    contiene_orario = bool(
+        re.search(
+            r"\b\d{1,2}[:.]\d{2}\b",
+            stringa_data,
+        )
+    )
+
+    stringa_pulita = stringa_data.replace(
+        "(",
+        " ",
+    ).replace(
+        ")",
+        " ",
+    )
+
+    stringa_pulita = pulisci_testo(
+        stringa_pulita
+    )
+
+    data = dateparser.parse(
+        stringa_pulita,
+        languages=[
+            "en",
+            "it",
+        ],
+        settings={
+            "DATE_ORDER": "DMY",
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "TIMEZONE": "Europe/Rome",
+            "TO_TIMEZONE": "Europe/Rome",
+            "STRICT_PARSING": False,
+        },
+    )
+
+    if data is None:
+        return None
+
+    if data.tzinfo is None:
+        data = data.replace(
+            tzinfo=FUSO_ORARIO_EUROPA
+        )
+
+    if (
+        fine_giornata_se_senza_orario
+        and not contiene_orario
+    ):
+        data = data.replace(
+            hour=23,
+            minute=59,
+            second=59,
+            microsecond=0,
+        )
+
+    return data
+
+
+def valuta_submission(
+    data_apertura,
+    deadline,
+):
+    """
+    Determina lo stato effettivo della submission.
+
+    Possibili stati:
+    - programmata;
+    - aperta;
+    - scaduta;
+    - deadline_non_rilevata.
+    """
+
+    adesso = datetime.now(
+        timezone.utc
+    )
+
+    if deadline is None:
+        return {
+            "submission_aperta": False,
+            "stato_submission": (
+                "deadline_non_rilevata"
+            ),
+            "giorni_residui": None,
+        }
+
+    deadline_utc = deadline.astimezone(
+        timezone.utc
+    )
+
+    if (
+        data_apertura is not None
+        and adesso
+        < data_apertura.astimezone(timezone.utc)
+    ):
+        differenza = (
+            data_apertura.astimezone(timezone.utc)
+            - adesso
+        )
+
+        giorni_apertura = int(
+            differenza.total_seconds() // 86400
+        )
+
+        if differenza.total_seconds() % 86400:
+            giorni_apertura += 1
+
+        return {
+            "submission_aperta": False,
+            "stato_submission": "programmata",
+            "giorni_residui": None,
+            "giorni_all_apertura": giorni_apertura,
+        }
+
+    differenza = deadline_utc - adesso
+
+    secondi_residui = (
+        differenza.total_seconds()
+    )
+
+    if secondi_residui <= 0:
+        return {
+            "submission_aperta": False,
+            "stato_submission": "scaduta",
+            "giorni_residui": 0,
+        }
+
+    giorni_residui = int(
+        secondi_residui // 86400
+    )
+
+    if secondi_residui % 86400:
+        giorni_residui += 1
+
+    return {
+        "submission_aperta": True,
+        "stato_submission": "aperta",
+        "giorni_residui": giorni_residui,
+    }
+
+
+def pulisci_titolo_topic(titolo):
+    """
+    Elimina eventuale testo appartenente
+    alle sezioni successive.
+    """
+
+    indicatori_finali = [
+        "The European Commission",
+        "HaDEA has published",
+        "Interested applicants",
+        "Interested parties",
+        "Deadline to apply",
+        "Deadline date",
+        "Funding programme",
+        "Programme Sector",
+        "Programme Horizon",
+        "Tags",
+        "Relevant links",
+        "Background",
+    ]
+
+    titolo_pulito = titolo
+
+    for indicatore in indicatori_finali:
+        posizione = titolo_pulito.find(
+            indicatore
+        )
+
+        if posizione >= 0:
+            titolo_pulito = (
+                titolo_pulito[:posizione]
+            )
+
+    return titolo_pulito.strip(
+        " .:-"
+    )
+
+
+def estrai_topics(testo):
+    """
+    Estrae codici e titoli dei topic della call.
+
+    Esempio:
+    HORIZON-MISS-2026-02-CANCER-01:
+    Virtual Human Twin Models for Cancer Research
+    """
+
+    schema = re.compile(
+        r"("
+        + re.escape(PREFISSO_TOPIC)
+        + r"-\d{2})"
+        + r"\s*:\s*"
+        + r"(.+?)"
+        + r"(?="
+        + re.escape(PREFISSO_TOPIC)
+        + r"-\d{2}\s*:|$)",
+        flags=(
+            re.IGNORECASE
+            | re.DOTALL
+        ),
+    )
+
+    topics = []
+    codici_visti = set()
+
+    for corrispondenza in schema.finditer(
+        testo
+    ):
+        codice_topic = (
+            corrispondenza.group(1).upper()
+        )
+
+        if codice_topic in codici_visti:
+            continue
+
+        titolo = pulisci_testo(
+            corrispondenza.group(2)
+        )
+
+        titolo = pulisci_titolo_topic(
+            titolo
+        )
+
+        if not titolo:
+            titolo = codice_topic
+
+        codici_visti.add(
+            codice_topic
+        )
+
+        topics.append(
+            {
+                "codice_topic": codice_topic,
+                "titolo": titolo,
+            }
+        )
+
+    topics.sort(
+        key=lambda elemento: (
+            elemento["codice_topic"]
+        )
+    )
+
+    return topics
+
+
 def trova_url_topic(
     soup,
     codice_topic,
 ):
     """
-    Cerca nella pagina un collegamento associato
-    allo specifico codice del topic.
+    Cerca un collegamento diretto per il topic.
 
-    Se non viene trovato un collegamento diretto,
-    restituisce la pagina generale della call.
+    Se non esiste, utilizza la pagina generale HaDEA.
     """
 
     for link in soup.find_all(
@@ -173,148 +581,110 @@ def trova_url_topic(
             )
         )
 
-        href = link.get(
+        indirizzo = link.get(
             "href",
             "",
         )
 
         if (
-            codice_topic in testo_link
-            or codice_topic in href
+            codice_topic.lower()
+            in testo_link.lower()
+            or codice_topic.lower()
+            in indirizzo.lower()
         ):
-            return normalizza_url(href)
+            return normalizza_url(
+                indirizzo
+            )
 
     return PAGINA_CALLS
 
 
-def trova_titolo_nel_testo(
-    testo,
-    codice_topic,
-):
-    """
-    Cerca il titolo del topic nel testo della pagina.
-
-    Il titolo viene individuato a partire dal codice
-    HORIZON-MISS-2026-02-CANCER-XX.
-    """
-
-    schema = (
-        re.escape(codice_topic)
-        + r"\s*:\s*"
-        + r"(.+?)"
-        + r"(?="
-        + re.escape(CODICE_CALL)
-        + r"-\d{2}\s*:|$)"
-    )
-
-    corrispondenza = re.search(
-        schema,
-        testo,
-        flags=re.IGNORECASE,
-    )
-
-    if not corrispondenza:
-        return None
-
-    titolo = pulisci_testo(
-        corrispondenza.group(1)
-    )
-
-    frasi_finali = [
-        "The European Commission",
-        "Interested applicants",
-        "Deadline",
-        "Funding programme",
-        "Programme Sector",
-        "Tags",
-    ]
-
-    for frase in frasi_finali:
-        posizione = titolo.find(frase)
-
-        if posizione >= 0:
-            titolo = titolo[:posizione]
-
-    return titolo.strip(
-        " .:-"
-    )
-
-
-def estrai_topics_da_testo(
+def costruisci_risultati(
     html,
+    testo,
+    metadati,
+    valutazione,
+    data_pubblicazione,
+    data_apertura,
+    deadline,
 ):
     """
-    Estrae automaticamente i topic della call
-    dal testo della pagina HaDEA.
+    Costruisce l'elenco dei topic.
+
+    I topic vengono restituiti soltanto se la
+    submission risulta ancora aperta.
     """
+
+    if not valutazione["submission_aperta"]:
+        return []
 
     soup = BeautifulSoup(
         html,
         "html.parser",
     )
 
-    testo = estrai_testo_principale(
-        html
-    )
-
-    schema_codice = re.compile(
-        re.escape(CODICE_CALL)
-        + r"-\d{2}",
-        flags=re.IGNORECASE,
-    )
-
-    codici_trovati = sorted(
-        {
-            codice.upper()
-            for codice in schema_codice.findall(
-                testo
-            )
-        }
+    topics_estratti = estrai_topics(
+        testo
     )
 
     risultati = []
 
-    for codice_topic in codici_trovati:
-        titolo = trova_titolo_nel_testo(
-            testo,
-            codice_topic,
-        )
-
-        if not titolo:
-            print(
-                "Attenzione: titolo non trovato "
-                f"per {codice_topic}"
-            )
-
-            titolo = codice_topic
-
-        url_topic = trova_url_topic(
-            soup,
-            codice_topic,
-        )
+    for topic in topics_estratti:
+        codice_topic = topic[
+            "codice_topic"
+        ]
 
         risultati.append(
             {
                 "fonte": FONTE,
-                "codice_call": CODICE_CALL,
+                "codice_call": (
+                    metadati["riferimento"]
+                    or PREFISSO_TOPIC
+                ),
                 "codice_topic": codice_topic,
-                "titolo": titolo,
-                "url": url_topic,
+                "titolo": topic["titolo"],
+                "url": trova_url_topic(
+                    soup,
+                    codice_topic,
+                ),
                 "pagina_fonte": PAGINA_CALLS,
-                "stato": STATO,
-                "scadenza": SCADENZA,
                 "rilevanza": "oncologica",
                 "parole_chiave_oncologiche": [
                     "cancer"
                 ],
+                "stato_dichiarato": (
+                    metadati[
+                        "stato_dichiarato"
+                    ]
+                ),
+                "submission_aperta": True,
+                "stato_submission": "aperta",
+                "data_pubblicazione": (
+                    data_pubblicazione.isoformat()
+                    if data_pubblicazione
+                    else None
+                ),
+                "data_apertura": (
+                    data_apertura.isoformat()
+                    if data_apertura
+                    else None
+                ),
+                "deadline": (
+                    deadline.isoformat()
+                ),
+                "deadline_testo": (
+                    metadati["deadline_testo"]
+                ),
+                "giorni_residui": (
+                    valutazione["giorni_residui"]
+                ),
+                "modello_deadline": (
+                    metadati[
+                        "modello_deadline"
+                    ]
+                ),
             }
         )
-
-    risultati.sort(
-        key=lambda elemento: (
-            elemento["codice_topic"]
-        )
-    )
 
     return risultati
 
@@ -322,9 +692,6 @@ def estrai_topics_da_testo(
 def carica_topics_precedenti():
     """
     Legge il JSON esistente.
-
-    Se il file non esiste o non è valido,
-    restituisce un elenco vuoto.
     """
 
     if not OUTPUT_FILE.exists():
@@ -340,17 +707,21 @@ def carica_topics_precedenti():
             "r",
             encoding="utf-8",
         ) as file:
-            dati = json.load(file)
+            dati = json.load(
+                file
+            )
 
         topics = dati.get(
             "calls",
             [],
         )
 
-        if not isinstance(topics, list):
+        if not isinstance(
+            topics,
+            list,
+        ):
             print(
-                "Il campo 'calls' "
-                "non è un elenco."
+                "Il campo 'calls' non è un elenco."
             )
 
             return []
@@ -380,8 +751,7 @@ def identifica_nuovi_topics(
     topics_correnti,
 ):
     """
-    Identifica i topic non presenti
-    nell'archivio precedente.
+    Identifica i topic nuovi in base al codice.
     """
 
     codici_precedenti = {
@@ -403,8 +773,8 @@ def identifica_topics_rimossi(
     topics_correnti,
 ):
     """
-    Identifica i topic precedentemente archiviati
-    che non compaiono più nella pagina.
+    Identifica i topic precedentemente attivi
+    che non risultano più nell'elenco corrente.
     """
 
     codici_correnti = {
@@ -427,8 +797,8 @@ def identifica_topics_modificati(
     topics_correnti,
 ):
     """
-    Identifica i topic presenti in entrambe
-    le esecuzioni ma con dati modificati.
+    Identifica variazioni a titolo, URL,
+    apertura, deadline o stato.
     """
 
     precedenti_per_codice = {
@@ -437,14 +807,15 @@ def identifica_topics_modificati(
         if topic.get("codice_topic")
     }
 
-    modificati = []
-
     campi_da_confrontare = [
         "titolo",
         "url",
-        "stato",
-        "scadenza",
+        "data_apertura",
+        "deadline",
+        "stato_submission",
     ]
+
+    modificati = []
 
     for topic_corrente in topics_correnti:
         codice = topic_corrente.get(
@@ -452,7 +823,9 @@ def identifica_topics_modificati(
         )
 
         topic_precedente = (
-            precedenti_per_codice.get(codice)
+            precedenti_per_codice.get(
+                codice
+            )
         )
 
         if not topic_precedente:
@@ -469,12 +842,12 @@ def identifica_topics_modificati(
             modificati.append(
                 {
                     "codice_topic": codice,
-                    "titolo": topic_corrente[
+                    "titolo": topic_corrente.get(
                         "titolo"
-                    ],
-                    "url": topic_corrente[
+                    ),
+                    "url": topic_corrente.get(
                         "url"
-                    ],
+                    ),
                     "campi_modificati": (
                         campi_modificati
                     ),
@@ -484,12 +857,20 @@ def identifica_topics_modificati(
     return modificati
 
 
-def salva_risultati(topics):
+def salva_risultati(
+    topics,
+    metadati,
+    valutazione,
+    data_pubblicazione,
+    data_apertura,
+    deadline,
+    totale_topics_pagina,
+):
     """
-    Salva il JSON in forma stabile.
+    Salva soltanto topic con submission aperta.
 
-    Non viene salvata la data di esecuzione,
-    così non vengono creati commit inutili.
+    Se la call è scaduta, il JSON resta valido
+    ma l'elenco calls sarà vuoto.
     """
 
     OUTPUT_FILE.parent.mkdir(
@@ -500,11 +881,54 @@ def salva_risultati(topics):
     dati = {
         "fonte": FONTE,
         "pagina_monitorata": PAGINA_CALLS,
-        "criterio": "oncologia",
-        "codice_call": CODICE_CALL,
-        "stato": STATO,
-        "scadenza": SCADENZA,
-        "numero_risultati": len(topics),
+        "criterio": (
+            "oncologia e submission non scaduta"
+        ),
+        "codice_call": (
+            metadati["riferimento"]
+            or PREFISSO_TOPIC
+        ),
+        "stato_dichiarato": (
+            metadati["stato_dichiarato"]
+        ),
+        "stato_submission": (
+            valutazione["stato_submission"]
+        ),
+        "submission_aperta": (
+            valutazione["submission_aperta"]
+        ),
+        "data_pubblicazione": (
+            data_pubblicazione.isoformat()
+            if data_pubblicazione
+            else None
+        ),
+        "data_apertura": (
+            data_apertura.isoformat()
+            if data_apertura
+            else None
+        ),
+        "deadline": (
+            deadline.isoformat()
+            if deadline
+            else None
+        ),
+        "deadline_testo": (
+            metadati["deadline_testo"]
+        ),
+        "modello_deadline": (
+            metadati["modello_deadline"]
+        ),
+        "giorni_residui": (
+            valutazione.get(
+                "giorni_residui"
+            )
+        ),
+        "totale_topics_nella_pagina": (
+            totale_topics_pagina
+        ),
+        "numero_risultati": len(
+            topics
+        ),
         "calls": topics,
     }
 
@@ -522,14 +946,34 @@ def salva_risultati(topics):
         file.write("\n")
 
 
+def formatta_data(data):
+    """
+    Converte una data in formato leggibile.
+    """
+
+    if data is None:
+        return "non rilevata"
+
+    data_locale = data.astimezone(
+        FUSO_ORARIO_EUROPA
+    )
+
+    return data_locale.strftime(
+        "%d/%m/%Y alle %H:%M %Z"
+    )
+
+
 def aggiungi_riepilogo_github(
     topics_correnti,
     nuovi_topics,
     topics_rimossi,
     topics_modificati,
+    metadati,
+    valutazione,
+    deadline,
 ):
     """
-    Inserisce un riepilogo nella pagina
+    Aggiunge il riepilogo alla pagina
     dell'esecuzione GitHub Actions.
     """
 
@@ -545,11 +989,36 @@ def aggiungi_riepilogo_github(
         "",
         (
             "Call monitorata: "
-            f"**{CODICE_CALL}**"
+            f"**{metadati['riferimento'] or PREFISSO_TOPIC}**"
         ),
         "",
         (
-            "Topic oncologici rilevati: "
+            "Stato dichiarato dalla fonte: "
+            f"**{metadati['stato_dichiarato'] or 'non rilevato'}**"
+        ),
+        "",
+        (
+            "Stato effettivo della submission: "
+            f"**{valutazione['stato_submission']}**"
+        ),
+        "",
+        (
+            "Deadline: "
+            f"**{formatta_data(deadline)}**"
+        ),
+        "",
+        (
+            "Deadline originale: "
+            f"**{metadati['deadline_testo'] or 'non rilevata'}**"
+        ),
+        "",
+        (
+            "Giorni residui: "
+            f"**{valutazione.get('giorni_residui')}**"
+        ),
+        "",
+        (
+            "Topic attivi rilevati: "
             f"**{len(topics_correnti)}**"
         ),
         "",
@@ -564,45 +1033,46 @@ def aggiungi_riepilogo_github(
         ),
         "",
         (
-            "Topic non più presenti: "
+            "Topic non più attivi: "
             f"**{len(topics_rimossi)}**"
         ),
         "",
-        (
-            "Scadenza: "
-            "**15 settembre 2026, "
-            "ore 17:00 CEST**"
-        ),
-        "",
-        "## Topic correnti",
-        "",
     ]
 
-    for topic in topics_correnti:
-        righe.append(
-            f"- **{topic['codice_topic']}**: "
-            f"[{topic['titolo']}]"
-            f"({topic['url']})"
-        )
-
-    righe.append("")
-
-    if nuovi_topics:
+    if topics_correnti:
         righe.extend(
             [
-                "## Nuovi topic",
+                "## Topic con submission aperta",
                 "",
             ]
         )
 
-        for topic in nuovi_topics:
+        for topic in topics_correnti:
             righe.append(
                 f"- **{topic['codice_topic']}**: "
                 f"[{topic['titolo']}]"
                 f"({topic['url']})"
             )
 
+            righe.append(
+                f"  - Deadline: "
+                f"**{formatta_data(deadline)}**"
+            )
+
+            righe.append(
+                f"  - Giorni residui: "
+                f"**{topic['giorni_residui']}**"
+            )
+
         righe.append("")
+
+    else:
+        righe.extend(
+            [
+                "Nessun topic con submission aperta.",
+                "",
+            ]
+        )
 
     if topics_modificati:
         righe.extend(
@@ -619,7 +1089,7 @@ def aggiungi_riepilogo_github(
 
             righe.append(
                 f"- **{topic['codice_topic']}**: "
-                f"campi modificati: {campi}"
+                f"{campi}"
             )
 
         righe.append("")
@@ -627,7 +1097,7 @@ def aggiungi_riepilogo_github(
     if topics_rimossi:
         righe.extend(
             [
-                "## Topic non più presenti",
+                "## Topic non più attivi",
                 "",
             ]
         )
@@ -640,19 +1110,6 @@ def aggiungi_riepilogo_github(
 
         righe.append("")
 
-    if (
-        not nuovi_topics
-        and not topics_modificati
-        and not topics_rimossi
-    ):
-        righe.extend(
-            [
-                "Nessuna variazione rispetto "
-                "all'esecuzione precedente.",
-                "",
-            ]
-        )
-
     with open(
         percorso,
         "a",
@@ -663,13 +1120,9 @@ def aggiungi_riepilogo_github(
         )
 
 
-def stampa_elenco(
-    titolo,
-    topics,
-):
+def stampa_elenco(titolo, topics):
     """
-    Stampa un elenco leggibile
-    nel registro del workflow.
+    Stampa un elenco leggibile nel registro.
     """
 
     print()
@@ -684,37 +1137,49 @@ def stampa_elenco(
         topics,
         start=1,
     ):
-        codice = topic.get(
-            "codice_topic",
-            "Codice non disponibile",
-        )
-
-        titolo_topic = topic.get(
-            "titolo",
-            "Titolo non disponibile",
-        )
-
-        url = topic.get(
-            "url",
-            "URL non disponibile",
+        print(
+            f"{numero}. "
+            f"{topic.get('codice_topic')}"
         )
 
         print(
-            f"{numero}. {codice}"
+            f"   {topic.get('titolo')}"
         )
 
         print(
-            f"   {titolo_topic}"
+            f"   {topic.get('url')}"
         )
 
-        print(
-            f"   {url}"
+        deadline = topic.get(
+            "deadline"
         )
+
+        if deadline:
+            data_deadline = (
+                datetime.fromisoformat(
+                    deadline
+                )
+            )
+
+            print(
+                "   Deadline: "
+                f"{formatta_data(data_deadline)}"
+            )
+
+        giorni_residui = topic.get(
+            "giorni_residui"
+        )
+
+        if giorni_residui is not None:
+            print(
+                "   Giorni residui: "
+                f"{giorni_residui}"
+            )
 
 
 def main():
     """
-    Funzione principale del monitor.
+    Funzione principale.
     """
 
     print("=" * 60)
@@ -740,40 +1205,63 @@ def main():
             PAGINA_CALLS,
         )
 
-        topics_correnti = (
-            estrai_topics_da_testo(html)
+        testo = estrai_testo_principale(
+            html
         )
 
-    except requests.RequestException as errore:
+        metadati = estrai_metadati_pagina(
+            testo
+        )
+
+        data_pubblicazione = interpreta_data(
+            metadati[
+                "data_pubblicazione_testo"
+            ]
+        )
+
+        data_apertura = interpreta_data(
+            metadati[
+                "data_apertura_testo"
+            ]
+        )
+
+        deadline = interpreta_data(
+            metadati["deadline_testo"],
+            fine_giornata_se_senza_orario=True,
+        )
+
+        valutazione = valuta_submission(
+            data_apertura,
+            deadline,
+        )
+
+        topics_nella_pagina = estrai_topics(
+            testo
+        )
+
+        if not topics_nella_pagina:
+            raise RuntimeError(
+                "Nessun topic Cancer Mission "
+                "individuato nella pagina."
+            )
+
+        topics_correnti = costruisci_risultati(
+            html,
+            testo,
+            metadati,
+            valutazione,
+            data_pubblicazione,
+            data_apertura,
+            deadline,
+        )
+
+    except (
+        requests.RequestException,
+        RuntimeError,
+    ) as errore:
         print(
-            "Errore durante il download: "
+            "Errore durante il monitoraggio: "
             f"{errore}"
-        )
-
-        print(
-            "Il file precedente non verrà "
-            "sovrascritto."
-        )
-
-        raise SystemExit(1)
-
-    except Exception as errore:
-        print(
-            "Errore durante l'analisi: "
-            f"{errore}"
-        )
-
-        print(
-            "Il file precedente non verrà "
-            "sovrascritto."
-        )
-
-        raise SystemExit(1)
-
-    if not topics_correnti:
-        print(
-            "Errore: nessun topic Cancer Mission "
-            "è stato individuato."
         )
 
         print(
@@ -801,7 +1289,13 @@ def main():
     )
 
     salva_risultati(
-        topics_correnti
+        topics_correnti,
+        metadati,
+        valutazione,
+        data_pubblicazione,
+        data_apertura,
+        deadline,
+        len(topics_nella_pagina),
     )
 
     aggiungi_riepilogo_github(
@@ -809,11 +1303,54 @@ def main():
         nuovi_topics,
         topics_rimossi,
         topics_modificati,
+        metadati,
+        valutazione,
+        deadline,
     )
 
     print()
     print(
-        "Topic oncologici rilevati: "
+        "Riferimento: "
+        f"{metadati['riferimento']}"
+    )
+
+    print(
+        "Stato dichiarato: "
+        f"{metadati['stato_dichiarato']}"
+    )
+
+    print(
+        "Apertura: "
+        f"{formatta_data(data_apertura)}"
+    )
+
+    print(
+        "Deadline originale: "
+        f"{metadati['deadline_testo']}"
+    )
+
+    print(
+        "Deadline interpretata: "
+        f"{formatta_data(deadline)}"
+    )
+
+    print(
+        "Stato effettivo submission: "
+        f"{valutazione['stato_submission']}"
+    )
+
+    print(
+        "Giorni residui: "
+        f"{valutazione.get('giorni_residui')}"
+    )
+
+    print(
+        "Topic presenti nella pagina: "
+        f"{len(topics_nella_pagina)}"
+    )
+
+    print(
+        "Topic con submission aperta: "
         f"{len(topics_correnti)}"
     )
 
@@ -828,7 +1365,7 @@ def main():
     )
 
     print(
-        "Topic non più presenti: "
+        "Topic non più attivi: "
         f"{len(topics_rimossi)}"
     )
 
@@ -837,7 +1374,7 @@ def main():
     )
 
     stampa_elenco(
-        "TOPIC CORRENTI",
+        "TOPIC CON SUBMISSION APERTA",
         topics_correnti,
     )
 
@@ -847,7 +1384,7 @@ def main():
     )
 
     stampa_elenco(
-        "TOPIC NON PIÙ PRESENTI",
+        "TOPIC NON PIÙ ATTIVI",
         topics_rimossi,
     )
 
