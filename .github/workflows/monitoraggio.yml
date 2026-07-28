@@ -1,0 +1,23 @@
+name: Monitoraggio bandi di ricerca
+
+on:
+  workflow_dispatch:
+
+jobs:
+  prova:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Scarica il contenuto del repository
+        uses: actions/checkout@v4
+
+      - name: Configura Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Controlla la versione di Python
+        run: python --version
+
+      - name: Messaggio di prova
+        run: echo "Il workflow per il monitoraggio dei bandi funziona correttamente."
