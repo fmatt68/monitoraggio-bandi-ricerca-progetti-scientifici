@@ -3,9 +3,12 @@ import os
 import re
 import time
 import unicodedata
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, urlunparse
+from zoneinfo import ZoneInfo
 
+import dateparser
 import requests
 from bs4 import BeautifulSoup
 
@@ -16,14 +19,18 @@ EP_PERMED_URL = (
     "https://www.eppermed.eu/funding-projects/calls/"
 )
 
-OUTPUT_FILE = Path("data/ep_permed_calls.json")
+OUTPUT_FILE = Path(
+    "data/ep_permed_calls.json"
+)
 
 REQUEST_DELAY_SECONDS = 0.4
 
+FUSO_ORARIO_EUROPA = ZoneInfo(
+    "Europe/Rome"
+)
 
-# Termini che indicano una pertinenza oncologica diretta.
+
 TERMINI_ONCOLOGICI = {
-    # Inglese
     "cancer",
     "cancers",
     "oncology",
@@ -66,8 +73,6 @@ TERMINI_ONCOLOGICI = {
     "neuroblastoma",
     "retinoblastoma",
     "medulloblastoma",
-
-    # Italiano
     "cancro",
     "tumore",
     "tumori",
@@ -92,11 +97,6 @@ TERMINI_ONCOLOGICI = {
 }
 
 
-# Termini trasversali che possono indicare una possibile
-# pertinenza oncologica.
-#
-# Una call viene classificata "da_verificare" soltanto se
-# contiene almeno due termini distinti di questo gruppo.
 TERMINI_DA_VERIFICARE = {
     "precision medicine",
     "personalised medicine",
@@ -141,6 +141,63 @@ PERCORSI_DA_IGNORARE = {
 }
 
 
+MESI_INGLESE = (
+    "January|February|March|April|May|June|"
+    "July|August|September|October|November|December"
+)
+
+MESI_ITALIANO = (
+    "gennaio|febbraio|marzo|aprile|maggio|giugno|"
+    "luglio|agosto|settembre|ottobre|novembre|dicembre"
+)
+
+NOMI_MESI = (
+    f"(?:{MESI_INGLESE}|{MESI_ITALIANO})"
+)
+
+
+SCHEMA_DATA_GIORNO_MESE = (
+    rf"\b\d{{1,2}}\s+{NOMI_MESI}\s+\d{{4}}"
+    r"(?:\s*(?:at|alle|,)\s*"
+    r"\d{1,2}(?:[:.]\d{2})?)?"
+    r"(?:\s*(?:CET|CEST|UTC|GMT))?"
+)
+
+SCHEMA_DATA_MESE_GIORNO = (
+    rf"\b{NOMI_MESI}\s+\d{{1,2}},?\s+\d{{4}}"
+    r"(?:\s*(?:at|alle|,)\s*"
+    r"\d{1,2}(?:[:.]\d{2})?)?"
+    r"(?:\s*(?:CET|CEST|UTC|GMT))?"
+)
+
+SCHEMA_DATA_ISO = (
+    r"\b\d{4}-\d{2}-\d{2}"
+    r"(?:[T\s]\d{1,2}:\d{2})?"
+    r"(?:\s*(?:CET|CEST|UTC|GMT))?"
+)
+
+SCHEMA_DATA_COMPLETO = (
+    rf"(?:"
+    rf"{SCHEMA_DATA_GIORNO_MESE}|"
+    rf"{SCHEMA_DATA_MESE_GIORNO}|"
+    rf"{SCHEMA_DATA_ISO}"
+    rf")"
+)
+
+SCHEMA_PAROLE_DEADLINE = (
+    r"(?:"
+    r"deadline(?:\s+date)?|"
+    r"submission\s+deadline|"
+    r"proposal\s+submission|"
+    r"proposals?\s+submissions?|"
+    r"application\s+deadline|"
+    r"applications?\s+submissions?|"
+    r"submit(?:ting)?\s+(?:the\s+)?"
+    r"(?:proposal|application)"
+    r")"
+)
+
+
 def crea_sessione():
     """
     Crea una sessione HTTP riutilizzabile.
@@ -168,8 +225,7 @@ def crea_sessione():
 
 def scarica_pagina(sessione, url):
     """
-    Scarica una pagina e interrompe il programma
-    in caso di errore HTTP.
+    Scarica una pagina HTML.
     """
 
     risposta = sessione.get(
@@ -192,17 +248,14 @@ def pulisci_testo(testo):
     Elimina spazi, tabulazioni e ritorni a capo ripetuti.
     """
 
-    return " ".join(testo.split())
+    return " ".join(
+        testo.split()
+    )
 
 
 def normalizza_testo(testo):
     """
-    Trasforma il testo in una forma adatta al confronto:
-
-    - converte in minuscolo;
-    - elimina gli accenti;
-    - normalizza i trattini;
-    - elimina spazi ripetuti.
+    Normalizza il testo per il confronto con le parole chiave.
     """
 
     testo = unicodedata.normalize(
@@ -213,25 +266,24 @@ def normalizza_testo(testo):
     testo = "".join(
         carattere
         for carattere in testo
-        if not unicodedata.combining(carattere)
+        if not unicodedata.combining(
+            carattere
+        )
     )
 
     testo = testo.lower()
-
     testo = testo.replace("–", "-")
     testo = testo.replace("—", "-")
 
-    return pulisci_testo(testo)
+    return pulisci_testo(
+        testo
+    )
 
 
 def normalizza_url(indirizzo):
     """
-    Converte gli URL relativi in URL assoluti.
-
-    Rimuove inoltre:
-    - parametri;
-    - frammenti;
-    - ancore interne.
+    Converte un URL relativo in URL assoluto
+    ed elimina parametri e frammenti.
     """
 
     assoluto = urljoin(
@@ -239,7 +291,9 @@ def normalizza_url(indirizzo):
         indirizzo.strip(),
     )
 
-    elementi = urlparse(assoluto)
+    elementi = urlparse(
+        assoluto
+    )
 
     percorso = elementi.path or "/"
 
@@ -261,10 +315,6 @@ def normalizza_url(indirizzo):
 def trova_titolo(link):
     """
     Ricava il titolo associato a un collegamento.
-
-    Se il testo del collegamento è generico, per esempio
-    'Read more', cerca il titolo nelle intestazioni HTML
-    del contenitore circostante.
     """
 
     titolo = pulisci_testo(
@@ -303,26 +353,29 @@ def trova_titolo(link):
         )
 
         if intestazione:
-            possibile_titolo = pulisci_testo(
+            titolo_trovato = pulisci_testo(
                 intestazione.get_text(
                     " ",
                     strip=True,
                 )
             )
 
-            if possibile_titolo:
-                return possibile_titolo
+            if titolo_trovato:
+                return titolo_trovato
 
     return titolo
 
 
 def collegamento_valido(titolo, indirizzo):
     """
-    Verifica che il collegamento rappresenti una pagina
-    EP PerMed potenzialmente relativa a una call.
+    Esclude menu, paginazione, sezioni generiche
+    e collegamenti esterni.
     """
 
-    elementi = urlparse(indirizzo)
+    elementi = urlparse(
+        indirizzo
+    )
+
     percorso = elementi.path
 
     domini_validi = {
@@ -352,8 +405,7 @@ def collegamento_valido(titolo, indirizzo):
 
 def estrai_link_calls(html):
     """
-    Estrae dalla pagina principale i collegamenti
-    alle possibili call EP PerMed.
+    Estrae dalla pagina principale le pagine candidate.
     """
 
     soup = BeautifulSoup(
@@ -380,7 +432,9 @@ def estrai_link_calls(html):
             indirizzo_originale
         )
 
-        titolo = trova_titolo(link)
+        titolo = trova_titolo(
+            link
+        )
 
         if not collegamento_valido(
             titolo,
@@ -391,7 +445,9 @@ def estrai_link_calls(html):
         if indirizzo in url_visti:
             continue
 
-        url_visti.add(indirizzo)
+        url_visti.add(
+            indirizzo
+        )
 
         risultati.append(
             {
@@ -406,11 +462,8 @@ def estrai_link_calls(html):
 
 def estrai_testo_principale(html):
     """
-    Estrae il testo principale della pagina.
-
-    Menu, intestazioni, footer, script e altri elementi
-    non informativi vengono eliminati per ridurre i
-    falsi positivi.
+    Estrae il testo principale della pagina,
+    eliminando gli elementi non informativi.
     """
 
     soup = BeautifulSoup(
@@ -426,6 +479,7 @@ def estrai_testo_principale(html):
         "nav",
         "footer",
         "header",
+        "form",
     ]
 
     for elemento in soup(
@@ -448,16 +502,9 @@ def estrai_testo_principale(html):
     )
 
 
-def termine_presente(
-    testo_normalizzato,
-    termine,
-):
+def termine_presente(testo_normalizzato, termine):
     """
     Cerca un termine rispettando i confini delle parole.
-
-    Evita, per esempio, che una sequenza contenuta
-    accidentalmente in un'altra parola venga considerata
-    una corrispondenza valida.
     """
 
     termine_normalizzato = normalizza_testo(
@@ -479,13 +526,9 @@ def termine_presente(
     )
 
 
-def trova_corrispondenze(
-    testo,
-    termini,
-):
+def trova_corrispondenze(testo, termini):
     """
-    Restituisce l'elenco ordinato dei termini trovati
-    nel testo.
+    Restituisce i termini trovati nel testo.
     """
 
     testo_normalizzato = normalizza_testo(
@@ -501,19 +544,15 @@ def trova_corrispondenze(
         )
     ]
 
-    return sorted(corrispondenze)
+    return sorted(
+        corrispondenze
+    )
 
 
-def classifica_call(
-    titolo,
-    testo_pagina,
-):
+def classifica_call(titolo, testo_pagina):
     """
-    Classifica la call in una delle categorie:
-
-    - oncologica;
-    - da_verificare;
-    - non_pertinente.
+    Classifica una call come oncologica,
+    da verificare oppure non pertinente.
     """
 
     testo_completo = (
@@ -546,19 +585,363 @@ def classifica_call(
     )
 
 
-def analizza_calls(
-    sessione,
-    candidati,
-):
+def calcola_punteggio_deadline(contesto):
     """
-    Visita ogni pagina candidata e applica
-    il filtro oncologico.
+    Assegna un punteggio di affidabilità
+    al contesto della possibile deadline.
+    """
+
+    testo = normalizza_testo(
+        contesto
+    )
+
+    punteggio = 0
+
+    criteri_positivi = {
+        "deadline for proposals submissions": 40,
+        "deadline for proposal submissions": 40,
+        "deadline for proposals submission": 40,
+        "deadline for proposal submission": 40,
+        "proposal submission deadline": 40,
+        "submission deadline": 35,
+        "deadline for proposals": 30,
+        "deadline for applications": 30,
+        "application deadline": 30,
+        "proposal submission": 20,
+        "proposals submissions": 20,
+        "deadline": 15,
+        "submission": 8,
+        "proposal": 5,
+        "application": 5,
+    }
+
+    criteri_negativi = {
+        "opening": -20,
+        "webinar": -25,
+        "matchmaking": -20,
+        "notification": -20,
+        "eligibility check": -20,
+        "final results": -25,
+        "kick off": -20,
+        "kick-off": -20,
+        "contracting": -15,
+        "project start": -15,
+        "project end": -15,
+        "stand still": -15,
+    }
+
+    for criterio, valore in criteri_positivi.items():
+        if criterio in testo:
+            punteggio += valore
+
+    for criterio, valore in criteri_negativi.items():
+        if criterio in testo:
+            punteggio += valore
+
+    return punteggio
+
+
+def estrai_candidati_deadline(testo_pagina):
+    """
+    Cerca costruzioni in cui una data è vicina
+    a parole come deadline, submission o proposal.
+
+    Gestisce sia:
+
+    26 February 2026 at 16:00 CET
+    Deadline for proposals submissions
+
+    sia:
+
+    Submission deadline:
+    26 February 2026 at 16:00 CET
+    """
+
+    testo = pulisci_testo(
+        testo_pagina
+    )
+
+    candidati = []
+
+    schema_data_prima = re.compile(
+        rf"(?P<data>{SCHEMA_DATA_COMPLETO})"
+        rf"(?P<separatore>.{{0,140}}?)"
+        rf"(?P<parola>{SCHEMA_PAROLE_DEADLINE})",
+        flags=re.IGNORECASE,
+    )
+
+    schema_parola_prima = re.compile(
+        rf"(?P<parola>{SCHEMA_PAROLE_DEADLINE})"
+        rf"(?P<separatore>.{{0,140}}?)"
+        rf"(?P<data>{SCHEMA_DATA_COMPLETO})",
+        flags=re.IGNORECASE,
+    )
+
+    for schema in [
+        schema_data_prima,
+        schema_parola_prima,
+    ]:
+        for corrispondenza in schema.finditer(
+            testo
+        ):
+            stringa_data = pulisci_testo(
+                corrispondenza.group("data")
+            )
+
+            inizio = max(
+                0,
+                corrispondenza.start() - 120,
+            )
+
+            fine = min(
+                len(testo),
+                corrispondenza.end() + 120,
+            )
+
+            contesto = pulisci_testo(
+                testo[inizio:fine]
+            )
+
+            candidati.append(
+                {
+                    "stringa_data": stringa_data,
+                    "contesto": contesto,
+                    "punteggio": (
+                        calcola_punteggio_deadline(
+                            contesto
+                        )
+                    ),
+                }
+            )
+
+    candidati_unici = []
+    chiavi_viste = set()
+
+    for candidato in candidati:
+        chiave = (
+            candidato["stringa_data"],
+            candidato["contesto"],
+        )
+
+        if chiave in chiavi_viste:
+            continue
+
+        chiavi_viste.add(
+            chiave
+        )
+
+        candidati_unici.append(
+            candidato
+        )
+
+    return candidati_unici
+
+
+def interpreta_data(stringa_data):
+    """
+    Converte una data testuale in datetime.
+
+    Se la data non specifica l'orario,
+    viene impostato prudenzialmente 23:59:59.
+    """
+
+    contiene_orario = bool(
+        re.search(
+            r"\b\d{1,2}[:.]\d{2}\b",
+            stringa_data,
+        )
+    )
+
+    data = dateparser.parse(
+        stringa_data,
+        languages=[
+            "en",
+            "it",
+        ],
+        settings={
+            "DATE_ORDER": "DMY",
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "TIMEZONE": "Europe/Rome",
+            "TO_TIMEZONE": "Europe/Rome",
+            "STRICT_PARSING": False,
+        },
+    )
+
+    if data is None:
+        return None
+
+    if data.tzinfo is None:
+        data = data.replace(
+            tzinfo=FUSO_ORARIO_EUROPA
+        )
+
+    if not contiene_orario:
+        data = data.replace(
+            hour=23,
+            minute=59,
+            second=59,
+            microsecond=0,
+        )
+
+    return data
+
+
+def estrai_deadline_submission(testo_pagina):
+    """
+    Individua la deadline di submission più affidabile.
+    """
+
+    candidati_testuali = estrai_candidati_deadline(
+        testo_pagina
+    )
+
+    candidati_validi = []
+
+    for candidato in candidati_testuali:
+        data = interpreta_data(
+            candidato["stringa_data"]
+        )
+
+        if data is None:
+            continue
+
+        candidati_validi.append(
+            {
+                "data": data,
+                "stringa_data": (
+                    candidato["stringa_data"]
+                ),
+                "contesto": (
+                    candidato["contesto"]
+                ),
+                "punteggio": (
+                    candidato["punteggio"]
+                ),
+            }
+        )
+
+    if not candidati_validi:
+        return None
+
+    candidati_validi.sort(
+        key=lambda elemento: (
+            elemento["punteggio"],
+            elemento["data"],
+        ),
+        reverse=True,
+    )
+
+    migliore = candidati_validi[0]
+
+    if migliore["punteggio"] < 20:
+        return None
+
+    return {
+        "deadline": (
+            migliore["data"].isoformat()
+        ),
+        "deadline_testo": (
+            migliore["stringa_data"]
+        ),
+        "deadline_contesto": (
+            migliore["contesto"]
+        ),
+        "deadline_affidabilita": (
+            migliore["punteggio"]
+        ),
+    }
+
+
+def valuta_deadline(deadline_iso):
+    """
+    Verifica se la deadline è futura
+    rispetto al momento di esecuzione.
+    """
+
+    if not deadline_iso:
+        return {
+            "submission_aperta": False,
+            "stato_submission": (
+                "deadline_non_rilevata"
+            ),
+            "giorni_residui": None,
+        }
+
+    try:
+        deadline = datetime.fromisoformat(
+            deadline_iso
+        )
+
+    except ValueError:
+        return {
+            "submission_aperta": False,
+            "stato_submission": (
+                "deadline_non_valida"
+            ),
+            "giorni_residui": None,
+        }
+
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(
+            tzinfo=FUSO_ORARIO_EUROPA
+        )
+
+    adesso = datetime.now(
+        timezone.utc
+    )
+
+    differenza = (
+        deadline.astimezone(timezone.utc)
+        - adesso
+    )
+
+    secondi_residui = (
+        differenza.total_seconds()
+    )
+
+    if secondi_residui <= 0:
+        return {
+            "submission_aperta": False,
+            "stato_submission": "scaduta",
+            "giorni_residui": 0,
+        }
+
+    giorni_residui = int(
+        secondi_residui // 86400
+    )
+
+    if secondi_residui % 86400:
+        giorni_residui += 1
+
+    return {
+        "submission_aperta": True,
+        "stato_submission": "aperta",
+        "giorni_residui": giorni_residui,
+    }
+
+
+def analizza_calls(sessione, candidati):
+    """
+    Analizza ogni pagina candidata.
+
+    Vengono selezionate soltanto call:
+    - oncologiche o da verificare;
+    - con deadline rilevata;
+    - con submission ancora aperta.
     """
 
     selezionate = []
-    non_pertinenti = 0
 
-    totale = len(candidati)
+    statistiche = {
+        "non_pertinenti": 0,
+        "scadute": 0,
+        "deadline_non_rilevate": 0,
+        "deadline_non_valide": 0,
+    }
+
+    totale = len(
+        candidati
+    )
 
     for numero, call in enumerate(
         candidati,
@@ -595,30 +978,156 @@ def analizza_calls(
         if parole_oncologiche:
             print(
                 "  Termini oncologici: "
-                + ", ".join(parole_oncologiche)
+                + ", ".join(
+                    parole_oncologiche
+                )
             )
 
         if parole_secondarie:
             print(
                 "  Termini secondari: "
-                + ", ".join(parole_secondarie)
+                + ", ".join(
+                    parole_secondarie
+                )
             )
 
         if rilevanza == "non_pertinente":
-            non_pertinenti += 1
+            statistiche[
+                "non_pertinenti"
+            ] += 1
 
-        else:
+            print(
+                "  Esclusa: non pertinente "
+                "all'oncologia."
+            )
+
+            if numero < totale:
+                time.sleep(
+                    REQUEST_DELAY_SECONDS
+                )
+
+            continue
+
+        informazioni_deadline = (
+            estrai_deadline_submission(
+                testo_pagina
+            )
+        )
+
+        if informazioni_deadline is None:
+            statistiche[
+                "deadline_non_rilevate"
+            ] += 1
+
+            print(
+                "  Deadline di submission "
+                "non rilevata."
+            )
+
+            print(
+                "  Esclusa prudenzialmente."
+            )
+
+            if numero < totale:
+                time.sleep(
+                    REQUEST_DELAY_SECONDS
+                )
+
+            continue
+
+        valutazione = valuta_deadline(
+            informazioni_deadline[
+                "deadline"
+            ]
+        )
+
+        print(
+            "  Deadline rilevata: "
+            f"{informazioni_deadline['deadline']}"
+        )
+
+        print(
+            "  Deadline originale: "
+            f"{informazioni_deadline['deadline_testo']}"
+        )
+
+        print(
+            "  Affidabilità estrazione: "
+            f"{informazioni_deadline['deadline_affidabilita']}"
+        )
+
+        print(
+            "  Stato submission: "
+            f"{valutazione['stato_submission']}"
+        )
+
+        stato = valutazione[
+            "stato_submission"
+        ]
+
+        if stato == "scaduta":
+            statistiche[
+                "scadute"
+            ] += 1
+
+            print(
+                "  Esclusa: submission scaduta."
+            )
+
+        elif stato == "deadline_non_valida":
+            statistiche[
+                "deadline_non_valide"
+            ] += 1
+
+            print(
+                "  Esclusa: deadline non valida."
+            )
+
+        elif valutazione["submission_aperta"]:
+            risultato = {
+                **call,
+                "rilevanza": rilevanza,
+                "parole_chiave_oncologiche": (
+                    parole_oncologiche
+                ),
+                "parole_chiave_secondarie": (
+                    parole_secondarie
+                ),
+                "submission_aperta": True,
+                "stato_submission": "aperta",
+                "deadline": (
+                    informazioni_deadline[
+                        "deadline"
+                    ]
+                ),
+                "deadline_testo": (
+                    informazioni_deadline[
+                        "deadline_testo"
+                    ]
+                ),
+                "deadline_affidabilita": (
+                    informazioni_deadline[
+                        "deadline_affidabilita"
+                    ]
+                ),
+                "giorni_residui": (
+                    valutazione[
+                        "giorni_residui"
+                    ]
+                ),
+            }
+
             selezionate.append(
-                {
-                    **call,
-                    "rilevanza": rilevanza,
-                    "parole_chiave_oncologiche": (
-                        parole_oncologiche
-                    ),
-                    "parole_chiave_secondarie": (
-                        parole_secondarie
-                    ),
-                }
+                risultato
+            )
+
+            print(
+                "  Inclusa: submission aperta."
+            )
+
+            print(
+                "  Giorni residui: "
+                f"{valutazione['giorni_residui']}"
             )
 
         if numero < totale:
@@ -628,27 +1137,24 @@ def analizza_calls(
 
     selezionate.sort(
         key=lambda elemento: (
+            elemento["deadline"],
             0
             if elemento["rilevanza"]
             == "oncologica"
             else 1,
             elemento["titolo"].lower(),
-            elemento["url"],
         )
     )
 
     return (
         selezionate,
-        non_pertinenti,
+        statistiche,
     )
 
 
 def carica_calls_precedenti():
     """
     Legge il JSON già presente nel repository.
-
-    Se il file non esiste o non è valido,
-    restituisce un elenco vuoto.
     """
 
     if not OUTPUT_FILE.exists():
@@ -663,14 +1169,19 @@ def carica_calls_precedenti():
             "r",
             encoding="utf-8",
         ) as file:
-            dati = json.load(file)
+            dati = json.load(
+                file
+            )
 
         calls = dati.get(
             "calls",
             [],
         )
 
-        if not isinstance(calls, list):
+        if not isinstance(
+            calls,
+            list,
+        ):
             print(
                 "Il campo 'calls' non è un elenco."
             )
@@ -702,8 +1213,7 @@ def identifica_nuove_calls(
     calls_correnti,
 ):
     """
-    Identifica le call selezionate che non erano
-    presenti nell'archivio precedente.
+    Identifica le call nuove sulla base dell'URL.
     """
 
     url_precedenti = {
@@ -724,8 +1234,7 @@ def identifica_calls_rimosse(
     calls_correnti,
 ):
     """
-    Identifica le call precedentemente selezionate
-    che non sono più presenti fra i risultati correnti.
+    Identifica call che non risultano più attive.
     """
 
     url_correnti = {
@@ -742,14 +1251,73 @@ def identifica_calls_rimosse(
     ]
 
 
+def identifica_calls_modificate(
+    calls_precedenti,
+    calls_correnti,
+):
+    """
+    Identifica modifiche a titolo, deadline,
+    stato o classificazione.
+    """
+
+    precedenti_per_url = {
+        call.get("url"): call
+        for call in calls_precedenti
+        if call.get("url")
+    }
+
+    campi_da_confrontare = [
+        "titolo",
+        "rilevanza",
+        "deadline",
+        "stato_submission",
+    ]
+
+    modificate = []
+
+    for call_corrente in calls_correnti:
+        url = call_corrente.get(
+            "url"
+        )
+
+        call_precedente = (
+            precedenti_per_url.get(url)
+        )
+
+        if not call_precedente:
+            continue
+
+        campi_modificati = [
+            campo
+            for campo in campi_da_confrontare
+            if call_precedente.get(campo)
+            != call_corrente.get(campo)
+        ]
+
+        if campi_modificati:
+            modificate.append(
+                {
+                    "titolo": (
+                        call_corrente["titolo"]
+                    ),
+                    "url": url,
+                    "campi_modificati": (
+                        campi_modificati
+                    ),
+                }
+            )
+
+    return modificate
+
+
 def salva_risultati(
     calls,
     totale_candidati,
-    totale_non_pertinenti,
+    statistiche,
 ):
     """
-    Salva esclusivamente le call oncologiche
-    e quelle da verificare.
+    Salva esclusivamente le call pertinenti
+    con submission ancora aperta.
     """
 
     OUTPUT_FILE.parent.mkdir(
@@ -760,12 +1328,27 @@ def salva_risultati(
     dati = {
         "fonte": FONTE,
         "pagina_monitorata": EP_PERMED_URL,
-        "criterio": "oncologia",
+        "criterio": (
+            "oncologia e submission non scaduta"
+        ),
         "totale_pagine_candidate": (
             totale_candidati
         ),
         "totale_non_pertinenti": (
-            totale_non_pertinenti
+            statistiche["non_pertinenti"]
+        ),
+        "totale_call_scadute": (
+            statistiche["scadute"]
+        ),
+        "totale_deadline_non_rilevate": (
+            statistiche[
+                "deadline_non_rilevate"
+            ]
+        ),
+        "totale_deadline_non_valide": (
+            statistiche[
+                "deadline_non_valide"
+            ]
         ),
         "numero_risultati": len(calls),
         "calls": calls,
@@ -785,15 +1368,46 @@ def salva_risultati(
         file.write("\n")
 
 
+def formatta_deadline(deadline_iso):
+    """
+    Converte una deadline ISO in formato leggibile.
+    """
+
+    try:
+        deadline = datetime.fromisoformat(
+            deadline_iso
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return deadline_iso
+
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(
+            tzinfo=FUSO_ORARIO_EUROPA
+        )
+
+    deadline_locale = deadline.astimezone(
+        FUSO_ORARIO_EUROPA
+    )
+
+    return deadline_locale.strftime(
+        "%d/%m/%Y alle %H:%M %Z"
+    )
+
+
 def aggiungi_riepilogo_github(
     calls_correnti,
     nuove_calls,
     calls_rimosse,
-    non_pertinenti,
+    calls_modificate,
+    statistiche,
 ):
     """
-    Aggiunge un riepilogo leggibile alla pagina
-    dell'esecuzione di GitHub Actions.
+    Inserisce il riepilogo nella pagina
+    dell'esecuzione GitHub Actions.
     """
 
     percorso = os.environ.get(
@@ -816,25 +1430,44 @@ def aggiungi_riepilogo_github(
     righe = [
         "# Monitoraggio oncologico EP PerMed",
         "",
-        f"Call oncologiche: **{oncologiche}**",
-        "",
         (
-            "Call da verificare: "
-            f"**{da_verificare}**"
+            "Call oncologiche con submission "
+            f"aperta: **{oncologiche}**"
         ),
         "",
         (
-            "Pagine escluse come non pertinenti: "
-            f"**{non_pertinenti}**"
+            "Call da verificare con submission "
+            f"aperta: **{da_verificare}**"
         ),
         "",
         (
-            "Nuove call selezionate: "
+            "Call escluse perché scadute: "
+            f"**{statistiche['scadute']}**"
+        ),
+        "",
+        (
+            "Call escluse perché la deadline "
+            "non è stata rilevata: "
+            f"**{statistiche['deadline_non_rilevate']}**"
+        ),
+        "",
+        (
+            "Pagine non pertinenti: "
+            f"**{statistiche['non_pertinenti']}**"
+        ),
+        "",
+        (
+            "Nuove call attive: "
             f"**{len(nuove_calls)}**"
         ),
         "",
         (
-            "Call selezionate non più presenti: "
+            "Call modificate: "
+            f"**{len(calls_modificate)}**"
+        ),
+        "",
+        (
+            "Call non più attive: "
             f"**{len(calls_rimosse)}**"
         ),
         "",
@@ -843,26 +1476,32 @@ def aggiungi_riepilogo_github(
     if calls_correnti:
         righe.extend(
             [
-                "## Risultati correnti",
+                "## Call attive",
                 "",
             ]
         )
 
         for call in calls_correnti:
-            parole = (
-                call[
-                    "parole_chiave_oncologiche"
-                ]
-                or call[
-                    "parole_chiave_secondarie"
-                ]
+            deadline_visualizzata = (
+                formatta_deadline(
+                    call["deadline"]
+                )
             )
 
             righe.append(
                 f"- **{call['rilevanza']}**: "
                 f"[{call['titolo']}]"
-                f"({call['url']}) "
-                f"- parole: {', '.join(parole)}"
+                f"({call['url']})"
+            )
+
+            righe.append(
+                f"  - Deadline: "
+                f"**{deadline_visualizzata}**"
+            )
+
+            righe.append(
+                f"  - Giorni residui: "
+                f"**{call['giorni_residui']}**"
             )
 
         righe.append("")
@@ -870,7 +1509,8 @@ def aggiungi_riepilogo_github(
     else:
         righe.extend(
             [
-                "Nessuna call pertinente rilevata.",
+                "Nessuna call oncologica "
+                "con submission aperta.",
                 "",
             ]
         )
@@ -878,7 +1518,7 @@ def aggiungi_riepilogo_github(
     if nuove_calls:
         righe.extend(
             [
-                "## Nuove call",
+                "## Nuove call attive",
                 "",
             ]
         )
@@ -887,6 +1527,42 @@ def aggiungi_riepilogo_github(
             righe.append(
                 f"- [{call['titolo']}]"
                 f"({call['url']})"
+            )
+
+        righe.append("")
+
+    if calls_modificate:
+        righe.extend(
+            [
+                "## Call modificate",
+                "",
+            ]
+        )
+
+        for call in calls_modificate:
+            campi = ", ".join(
+                call["campi_modificati"]
+            )
+
+            righe.append(
+                f"- [{call['titolo']}]"
+                f"({call['url']}): {campi}"
+            )
+
+        righe.append("")
+
+    if calls_rimosse:
+        righe.extend(
+            [
+                "## Call non più attive",
+                "",
+            ]
+        )
+
+        for call in calls_rimosse:
+            righe.append(
+                f"- [{call.get('titolo', 'Senza titolo')}]"
+                f"({call.get('url', '')})"
             )
 
         righe.append("")
@@ -901,13 +1577,9 @@ def aggiungi_riepilogo_github(
         )
 
 
-def stampa_elenco(
-    titolo,
-    calls,
-):
+def stampa_elenco(titolo, calls):
     """
-    Stampa nel registro di GitHub Actions
-    un elenco leggibile di call.
+    Stampa un elenco leggibile nel registro.
     """
 
     print()
@@ -927,20 +1599,9 @@ def stampa_elenco(
             "archivio_precedente",
         )
 
-        parole = (
-            call.get(
-                "parole_chiave_oncologiche",
-                [],
-            )
-            or call.get(
-                "parole_chiave_secondarie",
-                [],
-            )
-        )
-
         titolo_call = call.get(
             "titolo",
-            "Senza titolo",
+            "Titolo non disponibile",
         )
 
         url_call = call.get(
@@ -958,6 +1619,51 @@ def stampa_elenco(
             f"   {url_call}"
         )
 
+        deadline = call.get(
+            "deadline"
+        )
+
+        if deadline:
+            print(
+                "   Deadline: "
+                f"{formatta_deadline(deadline)}"
+            )
+
+            print(
+                f"   Deadline ISO: {deadline}"
+            )
+
+        deadline_testo = call.get(
+            "deadline_testo"
+        )
+
+        if deadline_testo:
+            print(
+                "   Deadline riportata "
+                f"nella pagina: {deadline_testo}"
+            )
+
+        giorni_residui = call.get(
+            "giorni_residui"
+        )
+
+        if giorni_residui is not None:
+            print(
+                "   Giorni residui: "
+                f"{giorni_residui}"
+            )
+
+        parole = (
+            call.get(
+                "parole_chiave_oncologiche",
+                [],
+            )
+            or call.get(
+                "parole_chiave_secondarie",
+                [],
+            )
+        )
+
         if parole:
             print(
                 "   Parole rilevate: "
@@ -967,7 +1673,7 @@ def stampa_elenco(
 
 def main():
     """
-    Funzione principale del programma.
+    Funzione principale.
     """
 
     print("=" * 60)
@@ -1010,7 +1716,7 @@ def main():
 
         (
             calls_correnti,
-            non_pertinenti,
+            statistiche,
         ) = analizza_calls(
             sessione,
             candidati,
@@ -1042,17 +1748,25 @@ def main():
         calls_correnti,
     )
 
+    calls_modificate = (
+        identifica_calls_modificate(
+            calls_precedenti,
+            calls_correnti,
+        )
+    )
+
     salva_risultati(
         calls_correnti,
         len(candidati),
-        non_pertinenti,
+        statistiche,
     )
 
     aggiungi_riepilogo_github(
         calls_correnti,
         nuove_calls,
         calls_rimosse,
-        non_pertinenti,
+        calls_modificate,
+        statistiche,
     )
 
     print()
@@ -1062,22 +1776,43 @@ def main():
     )
 
     print(
-        "Call selezionate: "
+        "Call attive selezionate: "
         f"{len(calls_correnti)}"
     )
 
     print(
         "Pagine non pertinenti: "
-        f"{non_pertinenti}"
+        f"{statistiche['non_pertinenti']}"
     )
 
     print(
-        "Nuove call selezionate: "
+        "Call escluse perché scadute: "
+        f"{statistiche['scadute']}"
+    )
+
+    print(
+        "Call escluse perché la deadline "
+        "non è stata rilevata: "
+        f"{statistiche['deadline_non_rilevate']}"
+    )
+
+    print(
+        "Deadline non valide: "
+        f"{statistiche['deadline_non_valide']}"
+    )
+
+    print(
+        "Nuove call attive: "
         f"{len(nuove_calls)}"
     )
 
     print(
-        "Call selezionate non più presenti: "
+        "Call modificate: "
+        f"{len(calls_modificate)}"
+    )
+
+    print(
+        "Call non più attive: "
         f"{len(calls_rimosse)}"
     )
 
@@ -1086,24 +1821,24 @@ def main():
     )
 
     stampa_elenco(
-        "RISULTATI ONCOLOGICI E DA VERIFICARE",
+        "CALL ONCOLOGICHE CON SUBMISSION APERTA",
         calls_correnti,
     )
 
     stampa_elenco(
-        "NUOVE CALL SELEZIONATE",
+        "NUOVE CALL ATTIVE",
         nuove_calls,
     )
 
     stampa_elenco(
-        "CALL SELEZIONATE NON PIÙ PRESENTI",
+        "CALL NON PIÙ ATTIVE",
         calls_rimosse,
     )
 
     print()
     print(
-        "Monitoraggio oncologico "
-        "completato correttamente."
+        "Monitoraggio oncologico e controllo "
+        "delle deadline completati correttamente."
     )
 
 
