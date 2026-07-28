@@ -1,38 +1,23 @@
 {
   "fonte": "EP PerMed",
   "pagina_monitorata": "https://www.eppermed.eu/funding-projects/calls/",
-  "data_controllo_utc": "2026-07-28T16:47:43.219764+00:00",
-  "numero_risultati": 16,
+  "data_controllo_utc": "2026-07-28T16:51:13.748252+00:00",
+  "numero_risultati": 11,
   "calls": [
-    {
-      "fonte": "EP PerMed",
-      "titolo": "Direkt zum Inhalt",
-      "url": "https://www.eppermed.eu/funding-projects/calls/#main"
-    },
-    {
-      "fonte": "EP PerMed",
-      "titolo": "Direkt zur Hauptnavigation",
-      "url": "https://www.eppermed.eu/funding-projects/calls/#main-menu"
-    },
-    {
-      "fonte": "EP PerMed",
-      "titolo": "Direkt zur Fußleiste",
-      "url": "https://www.eppermed.eu/funding-projects/calls/#footer"
-    },
-    {
-      "fonte": "EP PerMed",
-      "titolo": "Joint Transnational Calls",
-      "url": "https://www.eppermed.eu/funding-projects/calls/joint-transnational-calls/"
-    },
-    {
-      "fonte": "EP PerMed",
-      "titolo": "Research, Innovation and Technology Call for Proposals (RITC) 2026",
-      "url": "https://www.eppermed.eu/funding-projects/calls/ritc2026/"
-    },
     {
       "fonte": "EP PerMed",
       "titolo": "Education Call",
       "url": "https://www.eppermed.eu/funding-projects/calls/education-call-guide-to-personalised-medicine-for-healthcare-professionals/"
+    },
+    {
+      "fonte": "EP PerMed",
+      "titolo": "EP PerMed Joint Transnational Call (JTC) 2025",
+      "url": "https://www.eppermed.eu/funding-projects/calls/jtc2025/"
+    },
+    {
+      "fonte": "EP PerMed",
+      "titolo": "EP PerMed Joint Transnational Call (JTC) 2026",
+      "url": "https://www.eppermed.eu/funding-projects/calls/jtc2026/"
     },
     {
       "fonte": "EP PerMed",
@@ -41,8 +26,28 @@
     },
     {
       "fonte": "EP PerMed",
+      "titolo": "Fast Track Validation Programme 2025",
+      "url": "https://www.eppermed.eu/funding-projects/calls/fast-track-call/fast-track-validation-programme-2025/"
+    },
+    {
+      "fonte": "EP PerMed",
+      "titolo": "Fast Track Validation Programme 2026",
+      "url": "https://www.eppermed.eu/funding-projects/calls/fast-track-call/fast-track-validation-programme-2026/"
+    },
+    {
+      "fonte": "EP PerMed",
+      "titolo": "Fast Track Validation Programme – Call Announcement",
+      "url": "https://www.eppermed.eu/funding-projects/calls/fast-track-call/fast-track-validation-programme-2025/fast-track-validation-programme-call-announcement/"
+    },
+    {
+      "fonte": "EP PerMed",
       "titolo": "Networking Support Call (NSC) 2025",
       "url": "https://www.eppermed.eu/funding-projects/calls/networking-support-call-nsc-2025/"
+    },
+    {
+      "fonte": "EP PerMed",
+      "titolo": "Research, Innovation and Technology Call for Proposals (RITC) 2026",
+      "url": "https://www.eppermed.eu/funding-projects/calls/ritc2026/"
     },
     {
       "fonte": "EP PerMed",
@@ -53,36 +58,6 @@
       "fonte": "EP PerMed",
       "titolo": "Venture Creator",
       "url": "https://www.eppermed.eu/funding-projects/calls/venture-creator/"
-    },
-    {
-      "fonte": "EP PerMed",
-      "titolo": "Read more",
-      "url": "https://www.eppermed.eu/funding-projects/calls/fast-track-call/fast-track-validation-programme-2026/"
-    },
-    {
-      "fonte": "EP PerMed",
-      "titolo": "Read more",
-      "url": "https://www.eppermed.eu/funding-projects/calls/jtc2026/"
-    },
-    {
-      "fonte": "EP PerMed",
-      "titolo": "Read more",
-      "url": "https://www.eppermed.eu/funding-projects/calls/fast-track-call/fast-track-validation-programme-2025/fast-track-validation-programme-call-announcement/"
-    },
-    {
-      "fonte": "EP PerMed",
-      "titolo": "Read more",
-      "url": "https://www.eppermed.eu/funding-projects/calls/jtc2025/"
-    },
-    {
-      "fonte": "EP PerMed",
-      "titolo": "Read more",
-      "url": "https://www.eppermed.eu/funding-projects/calls/fast-track-call/fast-track-validation-programme-2025/"
-    },
-    {
-      "fonte": "EP PerMed",
-      "titolo": "2",
-      "url": "https://www.eppermed.eu/funding-projects/calls/?query-2-page=2"
     }
   ]
 }
