@@ -1,62 +1,118 @@
 {
   "fonte": "EP PerMed",
   "pagina_monitorata": "https://www.eppermed.eu/funding-projects/calls/",
-  "numero_risultati": 11,
+  "criterio": "oncologia",
+  "totale_pagine_candidate": 11,
+  "totale_non_pertinenti": 4,
+  "numero_risultati": 7,
   "calls": [
     {
       "fonte": "EP PerMed",
       "titolo": "Education Call",
-      "url": "https://www.eppermed.eu/funding-projects/calls/education-call-guide-to-personalised-medicine-for-healthcare-professionals/"
+      "url": "https://www.eppermed.eu/funding-projects/calls/education-call-guide-to-personalised-medicine-for-healthcare-professionals/",
+      "rilevanza": "oncologica",
+      "parole_chiave_oncologiche": [
+        "cancer",
+        "cancro",
+        "oncology"
+      ],
+      "parole_chiave_secondarie": [
+        "biomarkers",
+        "molecular profiling",
+        "personalised medicine",
+        "personalized medicine"
+      ]
     },
     {
       "fonte": "EP PerMed",
       "titolo": "EP PerMed Joint Transnational Call (JTC) 2025",
-      "url": "https://www.eppermed.eu/funding-projects/calls/jtc2025/"
-    },
-    {
-      "fonte": "EP PerMed",
-      "titolo": "EP PerMed Joint Transnational Call (JTC) 2026",
-      "url": "https://www.eppermed.eu/funding-projects/calls/jtc2026/"
-    },
-    {
-      "fonte": "EP PerMed",
-      "titolo": "Fast Track Validation Programme",
-      "url": "https://www.eppermed.eu/funding-projects/calls/fast-track-call/"
+      "url": "https://www.eppermed.eu/funding-projects/calls/jtc2025/",
+      "rilevanza": "oncologica",
+      "parole_chiave_oncologiche": [
+        "cancer",
+        "neoplasm",
+        "neoplasms"
+      ],
+      "parole_chiave_secondarie": [
+        "personalised medicine",
+        "screening"
+      ]
     },
     {
       "fonte": "EP PerMed",
       "titolo": "Fast Track Validation Programme 2025",
-      "url": "https://www.eppermed.eu/funding-projects/calls/fast-track-call/fast-track-validation-programme-2025/"
+      "url": "https://www.eppermed.eu/funding-projects/calls/fast-track-call/fast-track-validation-programme-2025/",
+      "rilevanza": "oncologica",
+      "parole_chiave_oncologiche": [
+        "cancer",
+        "cancers",
+        "malignancies",
+        "metastasis",
+        "metastatic",
+        "oncology",
+        "tumor",
+        "tumors"
+      ],
+      "parole_chiave_secondarie": [
+        "cell therapies",
+        "cell therapy",
+        "gene therapy",
+        "immunotherapies",
+        "molecular profiling",
+        "personalised medicine",
+        "personalized medicine",
+        "precision oncology"
+      ]
     },
     {
       "fonte": "EP PerMed",
       "titolo": "Fast Track Validation Programme 2026",
-      "url": "https://www.eppermed.eu/funding-projects/calls/fast-track-call/fast-track-validation-programme-2026/"
+      "url": "https://www.eppermed.eu/funding-projects/calls/fast-track-call/fast-track-validation-programme-2026/",
+      "rilevanza": "oncologica",
+      "parole_chiave_oncologiche": [
+        "cancer"
+      ],
+      "parole_chiave_secondarie": [
+        "personalised medicine"
+      ]
     },
     {
       "fonte": "EP PerMed",
       "titolo": "Fast Track Validation Programme – Call Announcement",
-      "url": "https://www.eppermed.eu/funding-projects/calls/fast-track-call/fast-track-validation-programme-2025/fast-track-validation-programme-call-announcement/"
+      "url": "https://www.eppermed.eu/funding-projects/calls/fast-track-call/fast-track-validation-programme-2025/fast-track-validation-programme-call-announcement/",
+      "rilevanza": "oncologica",
+      "parole_chiave_oncologiche": [
+        "cancer"
+      ],
+      "parole_chiave_secondarie": [
+        "personalised medicine"
+      ]
     },
     {
       "fonte": "EP PerMed",
       "titolo": "Networking Support Call (NSC) 2025",
-      "url": "https://www.eppermed.eu/funding-projects/calls/networking-support-call-nsc-2025/"
-    },
-    {
-      "fonte": "EP PerMed",
-      "titolo": "Research, Innovation and Technology Call for Proposals (RITC) 2026",
-      "url": "https://www.eppermed.eu/funding-projects/calls/ritc2026/"
+      "url": "https://www.eppermed.eu/funding-projects/calls/networking-support-call-nsc-2025/",
+      "rilevanza": "oncologica",
+      "parole_chiave_oncologiche": [
+        "cancer",
+        "neoplasms"
+      ],
+      "parole_chiave_secondarie": [
+        "personalised medicine",
+        "screening"
+      ]
     },
     {
       "fonte": "EP PerMed",
       "titolo": "Twinning Call 2026",
-      "url": "https://www.eppermed.eu/funding-projects/calls/twinning-call-2026/"
-    },
-    {
-      "fonte": "EP PerMed",
-      "titolo": "Venture Creator",
-      "url": "https://www.eppermed.eu/funding-projects/calls/venture-creator/"
+      "url": "https://www.eppermed.eu/funding-projects/calls/twinning-call-2026/",
+      "rilevanza": "da_verificare",
+      "parole_chiave_oncologiche": [],
+      "parole_chiave_secondarie": [
+        "early detection",
+        "personalised medicine",
+        "screening"
+      ]
     }
   ]
 }
