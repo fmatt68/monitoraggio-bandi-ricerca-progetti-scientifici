@@ -10,14 +10,14 @@ permissions:
   contents: write
 
 concurrency:
-  group: monitoraggio-bandi-oncologici
+  group: monitoraggio-bandi-oncologici-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   monitoraggio:
     name: Controllo call oncologiche
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Scarica il repository
@@ -46,32 +46,34 @@ jobs:
       - name: Esegue il monitoraggio EU Mission on Cancer
         run: python src/monitor_cancer_mission.py
 
+      - name: Esegue il monitoraggio Ricerca Finalizzata
+        run: python src/monitor_ricerca_finalizzata.py
+
       - name: Verifica i file JSON generati
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ ! -f "data/ep_permed_calls.json" ]; then
-            echo "Errore: data/ep_permed_calls.json non è stato creato."
-            exit 1
-          fi
+          files=(
+            "data/ep_permed_calls.json"
+            "data/eu_mission_cancer_calls.json"
+            "data/ricerca_finalizzata_calls.json"
+          )
 
-          if [ ! -f "data/eu_mission_cancer_calls.json" ]; then
-            echo "Errore: data/eu_mission_cancer_calls.json non è stato creato."
-            exit 1
-          fi
+          for file in "${files[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "Errore: il file $file non è stato creato."
+              exit 1
+            fi
 
-          python -m json.tool \
-            data/ep_permed_calls.json \
-            > /dev/null
+            python -m json.tool "$file" > /dev/null
 
-          python -m json.tool \
-            data/eu_mission_cancer_calls.json \
-            > /dev/null
+            echo "File presente e valido: $file"
+          done
 
-          echo "I file JSON sono presenti e validi."
+          echo "Tutti i file JSON sono presenti e validi."
 
-      - name: Mostra un riepilogo dei file
+      - name: Mostra il riepilogo complessivo
         shell: bash
         run: |
           set -euo pipefail
@@ -83,11 +85,14 @@ jobs:
           files = [
               Path("data/ep_permed_calls.json"),
               Path("data/eu_mission_cancer_calls.json"),
+              Path("data/ricerca_finalizzata_calls.json"),
           ]
 
-          print("=" * 60)
-          print("RIEPILOGO DEI RISULTATI")
-          print("=" * 60)
+          print("=" * 70)
+          print("RIEPILOGO COMPLESSIVO DEL MONITORAGGIO")
+          print("=" * 70)
+
+          totale = 0
 
           for file_path in files:
               with file_path.open(
@@ -96,37 +101,76 @@ jobs:
               ) as file:
                   data = json.load(file)
 
-              source = data.get(
+              fonte = data.get(
                   "fonte",
                   file_path.name,
               )
 
-              count = data.get(
-                  "numero_risultati",
-                  len(data.get("calls", [])),
+              calls = data.get(
+                  "calls",
+                  [],
               )
 
-              print()
-              print(f"Fonte: {source}")
-              print(f"File: {file_path}")
-              print(f"Risultati: {count}")
+              numero_risultati = data.get(
+                  "numero_risultati",
+                  len(calls),
+              )
 
-              for item in data.get("calls", []):
-                  title = item.get(
+              totale += numero_risultati
+
+              print()
+              print("-" * 70)
+              print(f"Fonte: {fonte}")
+              print(f"File: {file_path}")
+              print(f"Risultati attivi: {numero_risultati}")
+
+              if not calls:
+                  print("Nessuna call attiva rilevata.")
+                  continue
+
+              for numero, call in enumerate(
+                  calls,
+                  start=1,
+              ):
+                  codice = call.get(
+                      "codice_topic",
+                      "",
+                  )
+
+                  titolo = call.get(
                       "titolo",
                       "Titolo non disponibile",
                   )
 
-                  url = item.get(
+                  url = call.get(
                       "url",
                       "URL non disponibile",
                   )
 
-                  print(f"- {title}")
-                  print(f"  {url}")
+                  deadline = call.get(
+                      "deadline",
+                      "Deadline non disponibile",
+                  )
+
+                  if codice:
+                      print(
+                          f"{numero}. {codice} - {titolo}"
+                      )
+                  else:
+                      print(
+                          f"{numero}. {titolo}"
+                      )
+
+                  print(f"   URL: {url}")
+                  print(f"   Deadline: {deadline}")
 
           print()
-          print("Riepilogo completato.")
+          print("=" * 70)
+          print(
+              "Totale opportunità attive "
+              f"nelle tre fonti: {totale}"
+          )
+          print("=" * 70)
           PY
 
       - name: Configura Git
@@ -149,6 +193,7 @@ jobs:
 
           git add data/ep_permed_calls.json
           git add data/eu_mission_cancer_calls.json
+          git add data/ricerca_finalizzata_calls.json
 
           if git diff --cached --quiet; then
             echo "Nessuna modifica da registrare."
@@ -156,7 +201,8 @@ jobs:
           fi
 
           echo "Sono state rilevate modifiche nei risultati."
-
+          echo
+          echo "Riepilogo delle modifiche:"
           git diff --cached --stat
 
           git commit \
@@ -171,4 +217,5 @@ jobs:
             origin \
             "HEAD:${GITHUB_REF_NAME}"
 
+          echo
           echo "Aggiornamenti salvati correttamente nel repository."
