@@ -47,31 +47,61 @@ jobs:
         run: python src/monitor_cancer_mission.py
 
       - name: Esegue il monitoraggio Ricerca Finalizzata
+        id: ricerca_finalizzata
+        continue-on-error: true
         run: python src/monitor_ricerca_finalizzata.py
 
-      - name: Verifica i file JSON generati
+      - name: Segnala lo stato della Ricerca Finalizzata
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
 
-          files=(
+          if [ "${{ steps.ricerca_finalizzata.outcome }}" = "success" ]; then
+            echo "Monitoraggio Ricerca Finalizzata completato."
+          else
+            echo "Avviso: monitoraggio Ricerca Finalizzata non completato."
+            echo "Il sito del Ministero potrebbe aver bloccato GitHub Actions."
+            echo "Gli altri monitor continueranno normalmente."
+          fi
+
+      - name: Verifica i file JSON obbligatori
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          files_obbligatori=(
             "data/ep_permed_calls.json"
             "data/eu_mission_cancer_calls.json"
-            "data/ricerca_finalizzata_calls.json"
           )
 
-          for file in "${files[@]}"; do
+          for file in "${files_obbligatori[@]}"; do
             if [ ! -f "$file" ]; then
               echo "Errore: il file $file non è stato creato."
               exit 1
             fi
 
             python -m json.tool "$file" > /dev/null
-
-            echo "File presente e valido: $file"
+            echo "File obbligatorio presente e valido: $file"
           done
 
-          echo "Tutti i file JSON sono presenti e validi."
+          echo "I file JSON obbligatori sono validi."
+
+      - name: Verifica archivio Ricerca Finalizzata
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          file="data/ricerca_finalizzata_calls.json"
+
+          if [ -f "$file" ]; then
+            python -m json.tool "$file" > /dev/null
+            echo "Archivio Ricerca Finalizzata presente e valido."
+          else
+            echo "Archivio Ricerca Finalizzata non ancora disponibile."
+            echo "Questo non interrompe il workflow."
+          fi
 
       - name: Mostra il riepilogo complessivo
         shell: bash
@@ -95,6 +125,13 @@ jobs:
           totale = 0
 
           for file_path in files:
+              print()
+
+              if not file_path.exists():
+                  print("-" * 70)
+                  print(f"File non disponibile: {file_path}")
+                  continue
+
               with file_path.open(
                   "r",
                   encoding="utf-8",
@@ -118,14 +155,23 @@ jobs:
 
               totale += numero_risultati
 
-              print()
               print("-" * 70)
               print(f"Fonte: {fonte}")
               print(f"File: {file_path}")
-              print(f"Risultati attivi: {numero_risultati}")
+              print(f"Risultati archiviati: {numero_risultati}")
+
+              monitoraggio_completato = data.get(
+                  "monitoraggio_completato"
+              )
+
+              if monitoraggio_completato is not None:
+                  print(
+                      "Monitoraggio completato: "
+                      f"{monitoraggio_completato}"
+                  )
 
               if not calls:
-                  print("Nessuna call attiva rilevata.")
+                  print("Nessuna call attiva archiviata.")
                   continue
 
               for numero, call in enumerate(
@@ -168,7 +214,7 @@ jobs:
           print("=" * 70)
           print(
               "Totale opportunità attive "
-              f"nelle tre fonti: {totale}"
+              f"negli archivi: {totale}"
           )
           print("=" * 70)
           PY
@@ -193,7 +239,10 @@ jobs:
 
           git add data/ep_permed_calls.json
           git add data/eu_mission_cancer_calls.json
-          git add data/ricerca_finalizzata_calls.json
+
+          if [ -f "data/ricerca_finalizzata_calls.json" ]; then
+            git add data/ricerca_finalizzata_calls.json
+          fi
 
           if git diff --cached --quiet; then
             echo "Nessuna modifica da registrare."
@@ -203,6 +252,7 @@ jobs:
           echo "Sono state rilevate modifiche nei risultati."
           echo
           echo "Riepilogo delle modifiche:"
+
           git diff --cached --stat
 
           git commit \
