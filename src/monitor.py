@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+import os
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, urlunparse
 
@@ -28,6 +28,10 @@ PERCORSI_DA_IGNORARE = {
 
 
 def scarica_pagina(url):
+    """
+    Scarica la pagina delle call EP PerMed.
+    """
+
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (compatible; ResearchCallsMonitor/1.0; "
@@ -55,10 +59,12 @@ def scarica_pagina(url):
 
 def normalizza_url(indirizzo):
     """
-    Converte gli URL relativi in assoluti e rimuove:
-    - frammenti come #main
-    - parametri di paginazione
-    - spazi indesiderati
+    Converte un URL relativo in un URL assoluto.
+
+    Rimuove inoltre:
+    - frammenti come #main;
+    - parametri di paginazione;
+    - spazi iniziali o finali.
     """
 
     indirizzo_assoluto = urljoin(
@@ -68,11 +74,16 @@ def normalizza_url(indirizzo):
 
     elementi = urlparse(indirizzo_assoluto)
 
+    percorso = elementi.path
+
+    if not percorso.endswith("/"):
+        percorso = f"{percorso}/"
+
     return urlunparse(
         (
-            elementi.scheme,
-            elementi.netloc,
-            elementi.path,
+            elementi.scheme.lower(),
+            elementi.netloc.lower(),
+            percorso,
             "",
             "",
             "",
@@ -82,7 +93,7 @@ def normalizza_url(indirizzo):
 
 def pulisci_testo(testo):
     """
-    Elimina spazi, ritorni a capo e tabulazioni ripetute.
+    Elimina spazi, tabulazioni e ritorni a capo ripetuti.
     """
 
     return " ".join(testo.split())
@@ -90,21 +101,23 @@ def pulisci_testo(testo):
 
 def trova_titolo_della_call(link):
     """
-    Ricava il titolo dal testo del collegamento.
+    Ricava il titolo della call.
 
     Se il collegamento è denominato 'Read more', cerca il titolo
-    nell'articolo o nel contenitore HTML circostante.
+    nelle intestazioni HTML del contenitore circostante.
     """
 
     titolo = pulisci_testo(
         link.get_text(" ", strip=True)
     )
 
-    if titolo.lower() not in {
+    testi_generici = {
         "read more",
         "learn more",
         "more information",
-    }:
+    }
+
+    if titolo.lower() not in testi_generici:
         return titolo
 
     contenitore = link
@@ -124,7 +137,10 @@ def trova_titolo_della_call(link):
                 intestazione.get_text(" ", strip=True)
             )
 
-            if possibile_titolo:
+            if (
+                possibile_titolo
+                and possibile_titolo.lower() not in testi_generici
+            ):
                 return possibile_titolo
 
     return titolo
@@ -132,14 +148,17 @@ def trova_titolo_della_call(link):
 
 def collegamento_valido(titolo, indirizzo):
     """
-    Controlla che il collegamento rappresenti una possibile call
-    e non un elemento di navigazione del sito.
+    Esclude menu, ancore interne, paginazione e collegamenti
+    che non rappresentano pagine relative alle call.
     """
 
     elementi = urlparse(indirizzo)
     percorso = elementi.path
 
-    if elementi.netloc != "www.eppermed.eu":
+    if elementi.netloc not in {
+        "eppermed.eu",
+        "www.eppermed.eu",
+    }:
         return False
 
     if not percorso.startswith("/funding-projects/calls/"):
@@ -161,6 +180,10 @@ def collegamento_valido(titolo, indirizzo):
 
 
 def estrai_calls_ep_permed(html):
+    """
+    Estrae le call dalla pagina EP PerMed e rimuove i duplicati.
+    """
+
     soup = BeautifulSoup(html, "html.parser")
 
     risultati = []
@@ -192,13 +215,105 @@ def estrai_calls_ep_permed(html):
         )
 
     risultati.sort(
-        key=lambda elemento: elemento["titolo"].lower()
+        key=lambda elemento: (
+            elemento["titolo"].lower(),
+            elemento["url"],
+        )
     )
 
     return risultati
 
 
+def carica_calls_precedenti():
+    """
+    Legge il file JSON già presente nel repository.
+
+    Se il file non esiste o non è valido, restituisce
+    un elenco vuoto.
+    """
+
+    if not OUTPUT_FILE.exists():
+        print("Nessun archivio precedente trovato.")
+        return []
+
+    try:
+        with OUTPUT_FILE.open(
+            "r",
+            encoding="utf-8",
+        ) as file:
+            dati = json.load(file)
+
+        calls = dati.get("calls", [])
+
+        if not isinstance(calls, list):
+            print(
+                "Il campo 'calls' dell'archivio precedente "
+                "non è un elenco."
+            )
+            return []
+
+        print(
+            "Risultati presenti nell'archivio precedente: "
+            f"{len(calls)}"
+        )
+
+        return calls
+
+    except (OSError, json.JSONDecodeError) as errore:
+        print(
+            "Impossibile leggere l'archivio precedente: "
+            f"{errore}"
+        )
+
+        return []
+
+
+def identifica_nuove_calls(calls_precedenti, calls_correnti):
+    """
+    Confronta gli URL correnti con quelli già archiviati.
+    """
+
+    url_precedenti = {
+        call.get("url")
+        for call in calls_precedenti
+        if call.get("url")
+    }
+
+    return [
+        call
+        for call in calls_correnti
+        if call["url"] not in url_precedenti
+    ]
+
+
+def identifica_calls_rimosse(calls_precedenti, calls_correnti):
+    """
+    Identifica le call non più presenti nella pagina principale.
+    Non le elimina dallo storico, ma le segnala nel registro.
+    """
+
+    url_correnti = {
+        call.get("url")
+        for call in calls_correnti
+        if call.get("url")
+    }
+
+    return [
+        call
+        for call in calls_precedenti
+        if call.get("url")
+        and call["url"] not in url_correnti
+    ]
+
+
 def salva_risultati(calls):
+    """
+    Salva un JSON stabile.
+
+    Non viene inserita la data di esecuzione perché una data
+    variabile produrrebbe un nuovo commit a ogni controllo.
+    """
+
     OUTPUT_FILE.parent.mkdir(
         parents=True,
         exist_ok=True,
@@ -207,9 +322,6 @@ def salva_risultati(calls):
     dati = {
         "fonte": "EP PerMed",
         "pagina_monitorata": EP_PERMED_URL,
-        "data_controllo_utc": datetime.now(
-            timezone.utc
-        ).isoformat(),
         "numero_risultati": len(calls),
         "calls": calls,
     }
@@ -223,9 +335,104 @@ def salva_risultati(calls):
             file,
             ensure_ascii=False,
             indent=2,
+            sort_keys=False,
         )
 
         file.write("\n")
+
+
+def aggiungi_riepilogo_github(
+    calls_correnti,
+    nuove_calls,
+    calls_rimosse,
+):
+    """
+    Inserisce un riepilogo nella pagina dell'esecuzione
+    di GitHub Actions.
+    """
+
+    percorso_riepilogo = os.environ.get(
+        "GITHUB_STEP_SUMMARY"
+    )
+
+    if not percorso_riepilogo:
+        return
+
+    righe = [
+        "# Monitoraggio EP PerMed",
+        "",
+        f"Call rilevate: **{len(calls_correnti)}**",
+        "",
+        f"Nuove call: **{len(nuove_calls)}**",
+        "",
+        f"Call non più presenti nella pagina: "
+        f"**{len(calls_rimosse)}**",
+        "",
+    ]
+
+    if nuove_calls:
+        righe.extend(
+            [
+                "## Nuove call",
+                "",
+            ]
+        )
+
+        for call in nuove_calls:
+            righe.append(
+                f"- {call['url']}"
+            )
+
+        righe.append("")
+
+    if calls_rimosse:
+        righe.extend(
+            [
+                "## Call non più presenti nella pagina",
+                "",
+            ]
+        )
+
+        for call in calls_rimosse:
+            righe.append(
+                f"- {call['url']}"
+            )
+
+        righe.append("")
+
+    if not nuove_calls and not calls_rimosse:
+        righe.extend(
+            [
+                "Nessuna variazione rispetto "
+                "all'esecuzione precedente.",
+                "",
+            ]
+        )
+
+    with open(
+        percorso_riepilogo,
+        "a",
+        encoding="utf-8",
+    ) as file:
+        file.write("\n".join(righe))
+
+
+def stampa_elenco(titolo_sezione, calls):
+    """
+    Stampa nel log un elenco numerato di call.
+    """
+
+    print()
+    print(titolo_sezione)
+    print("-" * len(titolo_sezione))
+
+    if not calls:
+        print("Nessun risultato.")
+        return
+
+    for numero, call in enumerate(calls, start=1):
+        print(f"{numero}. {call['titolo']}")
+        print(f"   {call['url']}")
 
 
 def main():
@@ -234,10 +441,11 @@ def main():
     print("=" * 60)
     print(f"Controllo della pagina: {EP_PERMED_URL}")
 
+    calls_precedenti = carica_calls_precedenti()
+
     try:
         html = scarica_pagina(EP_PERMED_URL)
-        calls = estrai_calls_ep_permed(html)
-        salva_risultati(calls)
+        calls_correnti = estrai_calls_ep_permed(html)
 
     except requests.RequestException as errore:
         print(f"Errore durante il download: {errore}")
@@ -247,17 +455,54 @@ def main():
         print(f"Errore durante il monitoraggio: {errore}")
         raise SystemExit(1)
 
-    print(f"Risultati validi trovati: {len(calls)}")
-    print(f"File creato: {OUTPUT_FILE}")
+    if not calls_correnti:
+        print(
+            "Errore: non è stata individuata alcuna call. "
+            "Il file precedente non verrà sovrascritto."
+        )
+        raise SystemExit(1)
+
+    nuove_calls = identifica_nuove_calls(
+        calls_precedenti,
+        calls_correnti,
+    )
+
+    calls_rimosse = identifica_calls_rimosse(
+        calls_precedenti,
+        calls_correnti,
+    )
+
+    salva_risultati(calls_correnti)
+
     print()
+    print(f"Risultati validi trovati: {len(calls_correnti)}")
+    print(f"Nuove call rilevate: {len(nuove_calls)}")
+    print(
+        "Call non più presenti nella pagina: "
+        f"{len(calls_rimosse)}"
+    )
+    print(f"File aggiornato: {OUTPUT_FILE}")
 
-    if not calls:
-        print("Nessuna call individuata.")
-        return
+    stampa_elenco(
+        "ELENCO CORRENTE",
+        calls_correnti,
+    )
 
-    for numero, call in enumerate(calls, start=1):
-        print(f"{numero}. {call['titolo']}")
-        print(f"   {call['url']}")
+    stampa_elenco(
+        "NUOVE CALL",
+        nuove_calls,
+    )
+
+    stampa_elenco(
+        "CALL NON PIÙ PRESENTI",
+        calls_rimosse,
+    )
+
+    aggiungi_riepilogo_github(
+        calls_correnti,
+        nuove_calls,
+        calls_rimosse,
+    )
 
     print()
     print("Monitoraggio completato correttamente.")
