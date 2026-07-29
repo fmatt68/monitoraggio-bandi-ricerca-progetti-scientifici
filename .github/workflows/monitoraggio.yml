@@ -2,7 +2,6 @@ name: Monitoraggio bandi di ricerca oncologica
 
 on:
   workflow_dispatch:
-
   schedule:
     - cron: "0 6 * * 1-5"
 
@@ -17,7 +16,7 @@ jobs:
   monitoraggio:
     name: Controllo call oncologiche
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
 
     steps:
       - name: Scarica il repository
@@ -49,6 +48,7 @@ jobs:
           python -m py_compile src/monitor_cancer_mission.py
           python -m py_compile src/monitor_ricerca_finalizzata.py
           python -m py_compile src/monitor_worldwide_cancer_research.py
+          python -m py_compile src/monitor_era4health.py
 
           echo "La sintassi di tutti gli script Python e valida."
 
@@ -91,7 +91,25 @@ jobs:
             echo "Monitoraggio Worldwide Cancer Research completato."
           else
             echo "Avviso: monitoraggio Worldwide Cancer Research non completato."
-            echo "Il sito ha probabilmente bloccato il runner GitHub con HTTP 403."
+            echo "Gli altri monitor continueranno normalmente."
+          fi
+
+      - name: Esegue il monitoraggio ERA4Health
+        id: era4health
+        continue-on-error: true
+        run: python src/monitor_era4health.py
+
+      - name: Segnala lo stato di ERA4Health
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ steps.era4health.outcome }}" = "success" ]; then
+            echo "Monitoraggio ERA4Health completato."
+          else
+            echo "Avviso: monitoraggio ERA4Health non completato."
+            echo "L'archivio precedente, se presente, non viene sovrascritto."
             echo "Gli altri monitor continueranno normalmente."
           fi
 
@@ -146,7 +164,22 @@ jobs:
             echo "Archivio Worldwide Cancer Research presente e valido."
           else
             echo "Archivio Worldwide Cancer Research non ancora disponibile."
-            echo "Il sito ha probabilmente bloccato il runner GitHub."
+            echo "Questo non interrompe il workflow."
+          fi
+
+      - name: Verifica archivio ERA4Health
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          file="data/era4health_calls.json"
+
+          if [ -f "$file" ]; then
+            python -m json.tool "$file" > /dev/null
+            echo "Archivio ERA4Health presente e valido."
+          else
+            echo "Archivio ERA4Health non ancora disponibile."
             echo "Questo non interrompe il workflow."
           fi
 
@@ -164,6 +197,7 @@ jobs:
               Path("data/eu_mission_cancer_calls.json"),
               Path("data/ricerca_finalizzata_calls.json"),
               Path("data/worldwide_cancer_research_calls.json"),
+              Path("data/era4health_calls.json"),
           ]
 
           print("=" * 70)
@@ -180,115 +214,60 @@ jobs:
                   print(f"File non disponibile: {file_path}")
                   continue
 
-              with file_path.open(
-                  "r",
-                  encoding="utf-8",
-              ) as file:
+              with file_path.open("r", encoding="utf-8") as file:
                   data = json.load(file)
 
-              fonte = data.get(
-                  "fonte",
-                  file_path.name,
-              )
-
-              calls = data.get(
-                  "calls",
-                  [],
-              )
-
-              numero_risultati = data.get(
-                  "numero_risultati",
-                  len(calls),
-              )
-
+              fonte = data.get("fonte", file_path.name)
+              calls = data.get("calls", [])
+              numero_risultati = data.get("numero_risultati", len(calls))
               totale += numero_risultati
 
               print(f"Fonte: {fonte}")
               print(f"File: {file_path}")
-              print(
-                  f"Risultati attivi: {numero_risultati}"
-              )
+              print(f"Risultati attivi: {numero_risultati}")
 
-              stato_round = data.get(
-                  "stato_round"
-              )
+              stato_indice = data.get("stato_indice")
+              stato_round = data.get("stato_round")
+              stato_submission = data.get("stato_submission")
+              canale = data.get("canale_utilizzato")
+              deadline_generale = data.get("deadline")
 
-              stato_submission = data.get(
-                  "stato_submission"
-              )
+              if stato_indice is not None:
+                  print(f"Stato indice: {stato_indice}")
 
-              deadline_generale = data.get(
-                  "deadline"
-              )
+              if canale is not None:
+                  print(f"Canale utilizzato: {canale}")
 
               if stato_round is not None:
-                  print(
-                      f"Stato round: {stato_round}"
-                  )
+                  print(f"Stato round: {stato_round}")
 
               if stato_submission is not None:
-                  print(
-                      "Stato submission: "
-                      f"{stato_submission}"
-                  )
+                  print(f"Stato submission: {stato_submission}")
 
               if deadline_generale is not None:
-                  print(
-                      "Deadline generale: "
-                      f"{deadline_generale}"
-                  )
+                  print(f"Deadline generale: {deadline_generale}")
 
               if not calls:
-                  print(
-                      "Nessuna call attiva archiviata."
-                  )
+                  print("Nessuna call attiva archiviata.")
                   continue
 
-              for numero, call in enumerate(
-                  calls,
-                  start=1,
-              ):
-                  codice = call.get(
-                      "codice_topic",
-                      "",
-                  )
-
-                  titolo = call.get(
-                      "titolo",
-                      "Titolo non disponibile",
-                  )
-
-                  url = call.get(
-                      "url",
-                      "URL non disponibile",
-                  )
-
-                  deadline = call.get(
-                      "deadline",
-                      "Deadline non disponibile",
-                  )
+              for numero, call in enumerate(calls, start=1):
+                  codice = call.get("codice_topic", "")
+                  titolo = call.get("titolo", "Titolo non disponibile")
+                  url = call.get("url", "URL non disponibile")
+                  deadline = call.get("deadline", "Deadline non disponibile")
 
                   if codice:
-                      print(
-                          f"{numero}. "
-                          f"{codice} - {titolo}"
-                      )
+                      print(f"{numero}. {codice} - {titolo}")
                   else:
-                      print(
-                          f"{numero}. {titolo}"
-                      )
+                      print(f"{numero}. {titolo}")
 
                   print(f"   URL: {url}")
-                  print(
-                      f"   Deadline: {deadline}"
-                  )
+                  print(f"   Deadline: {deadline}")
 
           print()
           print("=" * 70)
-          print(
-              "Totale opportunita attive "
-              f"negli archivi: {totale}"
-          )
+          print(f"Totale opportunita attive negli archivi: {totale}")
           print("=" * 70)
           PY
 
@@ -297,13 +276,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          git config \
-            user.name \
-            "github-actions[bot]"
-
-          git config \
-            user.email \
-            "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Registra gli eventuali aggiornamenti
         shell: bash
@@ -321,6 +295,10 @@ jobs:
             git add data/worldwide_cancer_research_calls.json
           fi
 
+          if [ -f "data/era4health_calls.json" ]; then
+            git add data/era4health_calls.json
+          fi
+
           if git diff --cached --quiet; then
             echo "Nessuna modifica da registrare."
             exit 0
@@ -329,20 +307,11 @@ jobs:
           echo "Sono state rilevate modifiche nei risultati."
           echo
           echo "Riepilogo delle modifiche:"
-
           git diff --cached --stat
 
-          git commit \
-            -m "Aggiorna monitoraggio call oncologiche"
-
-          git pull \
-            --rebase \
-            origin \
-            "${GITHUB_REF_NAME}"
-
-          git push \
-            origin \
-            "HEAD:${GITHUB_REF_NAME}"
+          git commit -m "Aggiorna monitoraggio call oncologiche"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
 
           echo
           echo "Aggiornamenti salvati correttamente nel repository."
