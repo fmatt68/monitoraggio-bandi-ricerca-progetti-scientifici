@@ -106,10 +106,33 @@ def scarica_pagina(sessione, url):
 
 
 def normalizza_url(indirizzo, pagina_base=PAGINA_CALLS):
-    assoluto = urljoin(pagina_base, (indirizzo or "").strip())
+    """
+    Normalizza i collegamenti ERA4Health evitando il percorso duplicato
+    /calls/calls/ osservato quando l'indice usa href come calls/nome.php.
+    """
+
+    indirizzo = (indirizzo or "").strip()
+
+    if not indirizzo:
+        return ""
+
+    if indirizzo.startswith("calls/"):
+        assoluto = urljoin("https://era4health.eu/", indirizzo)
+    else:
+        assoluto = urljoin(pagina_base, indirizzo)
+
     elementi = urlparse(assoluto)
+    percorso = re.sub(r"^/calls/calls/", "/calls/", elementi.path)
+
     return urlunparse(
-        (elementi.scheme.lower(), elementi.netloc.lower(), elementi.path, "", "", "")
+        (
+            elementi.scheme.lower(),
+            elementi.netloc.lower(),
+            percorso,
+            "",
+            "",
+            "",
+        )
     )
 
 
@@ -138,40 +161,57 @@ def estrai_titolo(html, fallback):
 
 
 def estrai_link_calls(html):
+    """
+    Estrae soltanto le pagine delle call ERA4Health.
+
+    Esclude menu, contatti, cookie, news, pubblicazioni e formazione.
+    Accetta le pagine PHP direttamente sotto /calls/ il cui nome contiene
+    un anno, per esempio trials4health2026.php o preventoo2026.php.
+    """
+
     soup = BeautifulSoup(html, "html.parser")
+    area = soup.find("main") or soup.find("article") or soup.body or soup
+
     risultati = []
     visti = set()
 
-    for link in soup.find_all("a", href=True):
+    schema_call = re.compile(
+        r"^/calls/(?:pre_)?[a-z0-9_-]*20\d{2}\.php$",
+        flags=re.IGNORECASE,
+    )
+
+    for link in area.find_all("a", href=True):
         url = normalizza_url(link.get("href", ""))
+
+        if not url:
+            continue
+
         elementi = urlparse(url)
         testo_link = pulisci_testo(link.get_text(" ", strip=True))
 
         if elementi.netloc not in {"era4health.eu", "www.era4health.eu"}:
             continue
-        if not elementi.path.startswith("/calls/"):
+
+        if not schema_call.match(elementi.path):
             continue
-        if elementi.path in {"/calls", "/calls/"}:
-            continue
-        if not elementi.path.lower().endswith((".php", "/")):
-            continue
-        if any(
-            parte in elementi.path.lower()
-            for parte in ("/docs/", "partner", "results", "search")
-        ):
-            continue
+
         if url in visti:
             continue
 
         visti.add(url)
+
         risultati.append(
             {
-                "titolo_indice": testo_link or elementi.path.rsplit("/", 1)[-1],
+                "titolo_indice": (
+                    testo_link
+                    or elementi.path.rsplit("/", 1)[-1]
+                ),
                 "url": url,
             }
         )
 
-    risultati.sort(key=lambda x: x["url"])
+    risultati.sort(key=lambda elemento: elemento["url"])
+
     return risultati
 
 
@@ -352,6 +392,7 @@ def valuta_deadline(deadline_iso):
 
 def analizza_calls(sessione, candidati):
     risultati = []
+
     statistiche = {
         "candidate": len(candidati),
         "pagine_accessibili": 0,
@@ -363,72 +404,168 @@ def analizza_calls(sessione, candidati):
         "deadline_non_rilevate": 0,
     }
 
-    for numero, candidato in enumerate(candidati, start=1):
-        print(f"Analisi {numero}/{len(candidati)}: {candidato['url']}")
-
-        try:
-            html = scarica_pagina(sessione, candidato["url"])
-        except requests.RequestException as errore:
-            statistiche["pagine_non_analizzabili"] += 1
-            print(f"  Pagina non analizzabile: {errore}")
-            continue
-
-        statistiche["pagine_accessibili"] += 1
-        titolo = estrai_titolo(html, candidato["titolo_indice"])
-        testo = estrai_testo_principale(html)
-        testo_completo = f"{titolo} {testo}"
-
-        esclusioni = oncologia_esplicitamente_esclusa(testo_completo)
-        if esclusioni:
-            statistiche["oncologia_esclusa"] += 1
-            print("  Esclusa: il testo dichiara l'oncologia fuori ambito.")
-            continue
-
-        parole_oncologiche = trova_termini(testo_completo, TERMINI_ONCOLOGICI)
-        if not parole_oncologiche:
-            statistiche["non_oncologiche"] += 1
-            print("  Esclusa: nessun termine oncologico rilevato.")
-            continue
-
-        chiusure = pagina_dichiarata_chiusa(testo_completo)
-        if chiusure:
-            statistiche["dichiarate_chiuse"] += 1
-            print("  Esclusa: call dichiarata chiusa.")
-            continue
-
-        info_deadline = estrai_deadline_iniziale(testo_completo)
-        if info_deadline is None:
-            statistiche["deadline_non_rilevate"] += 1
-            print("  Esclusa prudenzialmente: deadline iniziale non rilevata.")
-            continue
-
-        valutazione = valuta_deadline(info_deadline["deadline"])
-        print(f"  Deadline iniziale: {info_deadline['deadline']}")
-        print(f"  Stato submission: {valutazione['stato_submission']}")
-
-        if not valutazione["submission_aperta"]:
-            statistiche["scadute"] += 1
-            continue
-
-        risultati.append(
-            {
-                "fonte": FONTE,
-                "titolo": titolo,
-                "url": candidato["url"],
-                "rilevanza": "oncologica",
-                "parole_chiave_oncologiche": parole_oncologiche,
-                "submission_aperta": True,
-                "stato_submission": "aperta",
-                "deadline": info_deadline["deadline"],
-                "deadline_testo": info_deadline["deadline_testo"],
-                "deadline_affidabilita": info_deadline["deadline_affidabilita"],
-            }
+    for numero, candidato in enumerate(
+        candidati,
+        start=1,
+    ):
+        print(
+            f"Analisi {numero}/{len(candidati)}: "
+            f"{candidato['url']}"
         )
 
-        if numero < len(candidati):
-            time.sleep(REQUEST_DELAY_SECONDS)
+        try:
+            html = scarica_pagina(
+                sessione,
+                candidato["url"],
+            )
 
-    risultati.sort(key=lambda x: (x["deadline"], x["titolo"].lower()))
+        except requests.RequestException as errore:
+            statistiche[
+                "pagine_non_analizzabili"
+            ] += 1
+
+            print(
+                "  Pagina non analizzabile: "
+                f"{errore}"
+            )
+
+        else:
+            statistiche[
+                "pagine_accessibili"
+            ] += 1
+
+            titolo = estrai_titolo(
+                html,
+                candidato["titolo_indice"],
+            )
+
+            testo = estrai_testo_principale(
+                html
+            )
+
+            testo_completo = (
+                f"{titolo} {testo}"
+            )
+
+            esclusioni = oncologia_esplicitamente_esclusa(
+                testo_completo
+            )
+
+            if esclusioni:
+                statistiche[
+                    "oncologia_esclusa"
+                ] += 1
+
+                print(
+                    "  Esclusa: il testo dichiara "
+                    "l'oncologia fuori ambito."
+                )
+
+            else:
+                parole_oncologiche = trova_termini(
+                    testo_completo,
+                    TERMINI_ONCOLOGICI,
+                )
+
+                if not parole_oncologiche:
+                    statistiche[
+                        "non_oncologiche"
+                    ] += 1
+
+                    print(
+                        "  Esclusa: nessun termine "
+                        "oncologico rilevato."
+                    )
+
+                else:
+                    chiusure = pagina_dichiarata_chiusa(
+                        testo_completo
+                    )
+
+                    if chiusure:
+                        statistiche[
+                            "dichiarate_chiuse"
+                        ] += 1
+
+                        print(
+                            "  Esclusa: call dichiarata chiusa."
+                        )
+
+                    else:
+                        info_deadline = estrai_deadline_iniziale(
+                            testo_completo
+                        )
+
+                        if info_deadline is None:
+                            statistiche[
+                                "deadline_non_rilevate"
+                            ] += 1
+
+                            print(
+                                "  Esclusa prudenzialmente: "
+                                "deadline iniziale non rilevata."
+                            )
+
+                        else:
+                            valutazione = valuta_deadline(
+                                info_deadline["deadline"]
+                            )
+
+                            print(
+                                "  Deadline iniziale: "
+                                f"{info_deadline['deadline']}"
+                            )
+
+                            print(
+                                "  Stato submission: "
+                                f"{valutazione['stato_submission']}"
+                            )
+
+                            if not valutazione[
+                                "submission_aperta"
+                            ]:
+                                statistiche[
+                                    "scadute"
+                                ] += 1
+
+                            else:
+                                risultati.append(
+                                    {
+                                        "fonte": FONTE,
+                                        "titolo": titolo,
+                                        "url": candidato["url"],
+                                        "rilevanza": "oncologica",
+                                        "parole_chiave_oncologiche": (
+                                            parole_oncologiche
+                                        ),
+                                        "submission_aperta": True,
+                                        "stato_submission": "aperta",
+                                        "deadline": (
+                                            info_deadline["deadline"]
+                                        ),
+                                        "deadline_testo": (
+                                            info_deadline["deadline_testo"]
+                                        ),
+                                        "deadline_affidabilita": (
+                                            info_deadline[
+                                                "deadline_affidabilita"
+                                            ]
+                                        ),
+                                    }
+                                )
+
+        if numero < len(candidati):
+            time.sleep(
+                REQUEST_DELAY_SECONDS
+            )
+
+    risultati.sort(
+        key=lambda elemento: (
+            elemento["deadline"],
+            elemento["titolo"].lower(),
+        )
+    )
+
     return risultati, statistiche
 
 
