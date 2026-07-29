@@ -76,8 +76,26 @@ jobs:
             echo "Gli altri monitor continueranno normalmente."
           fi
 
+
       - name: Esegue il monitoraggio Worldwide Cancer Research
+        id: worldwide_cancer_research
+        continue-on-error: true
         run: python src/monitor_worldwide_cancer_research.py
+
+      - name: Segnala lo stato di Worldwide Cancer Research
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ steps.worldwide_cancer_research.outcome }}" = "success" ]; then
+            echo "Monitoraggio Worldwide Cancer Research completato."
+          else
+            echo "Avviso: monitoraggio Worldwide Cancer Research non completato."
+            echo "Il sito ha probabilmente bloccato il runner GitHub con HTTP 403."
+            echo "Gli altri monitor continueranno normalmente."
+          fi
+
 
       - name: Verifica i file JSON obbligatori
         shell: bash
