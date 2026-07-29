@@ -50,6 +50,7 @@ jobs:
           python -m py_compile src/monitor_worldwide_cancer_research.py
           python -m py_compile src/monitor_era4health.py
           python -m py_compile src/monitor_fondazione_veronesi.py
+          python -m py_compile src/monitor_airc.py
 
           echo "La sintassi di tutti gli script Python e valida."
 
@@ -129,6 +130,25 @@ jobs:
             echo "Monitoraggio Fondazione Umberto Veronesi completato."
           else
             echo "Avviso: monitoraggio Fondazione Umberto Veronesi non completato."
+            echo "L'archivio precedente, se presente, non viene sovrascritto."
+            echo "Gli altri monitor continueranno normalmente."
+          fi
+
+      - name: Esegue il monitoraggio AIRC
+        id: airc
+        continue-on-error: true
+        run: python src/monitor_airc.py
+
+      - name: Segnala lo stato di AIRC
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ steps.airc.outcome }}" = "success" ]; then
+            echo "Monitoraggio AIRC completato."
+          else
+            echo "Avviso: monitoraggio AIRC non completato."
             echo "L'archivio precedente, se presente, non viene sovrascritto."
             echo "Gli altri monitor continueranno normalmente."
           fi
@@ -219,6 +239,22 @@ jobs:
             echo "Questo non interrompe il workflow."
           fi
 
+      - name: Verifica archivio AIRC
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          file="data/airc_calls.json"
+
+          if [ -f "$file" ]; then
+            python -m json.tool "$file" > /dev/null
+            echo "Archivio AIRC presente e valido."
+          else
+            echo "Archivio AIRC non ancora disponibile."
+            echo "Questo non interrompe il workflow."
+          fi
+
       - name: Mostra il riepilogo complessivo
         shell: bash
         run: |
@@ -235,6 +271,7 @@ jobs:
               Path("data/worldwide_cancer_research_calls.json"),
               Path("data/era4health_calls.json"),
               Path("data/fondazione_veronesi_calls.json"),
+              Path("data/airc_calls.json"),
           ]
 
           print("=" * 70)
@@ -338,6 +375,10 @@ jobs:
 
           if [ -f "data/fondazione_veronesi_calls.json" ]; then
             git add data/fondazione_veronesi_calls.json
+          fi
+
+          if [ -f "data/airc_calls.json" ]; then
+            git add data/airc_calls.json
           fi
 
           if git diff --cached --quiet; then
