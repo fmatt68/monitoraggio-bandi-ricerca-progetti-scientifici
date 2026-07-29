@@ -1,0 +1,19 @@
+{
+  "fonte": "AIRC",
+  "pagine_monitorate": [
+    "https://www.direzionescientifica.airc.it/funding-for-research/calls-calendar/",
+    "https://www.direzionescientifica.airc.it/funding-for-research/individual-grants/",
+    "https://www.direzionescientifica.airc.it/funding-for-research/fellowship/",
+    "https://www.direzionescientifica.airc.it/funding-for-research/multiunit-reasearch/"
+  ],
+  "criterio": "bandi oncologici AIRC con candidatura aperta",
+  "totale_pagine_seme_accessibili": 4,
+  "totale_programmi_candidati": 15,
+  "totale_pagine_accessibili": 13,
+  "totale_pagine_non_analizzabili": 2,
+  "totale_bandi_rilevati": 13,
+  "totale_bandi_scaduti": 1,
+  "totale_deadline_non_rilevate": 12,
+  "numero_risultati": 0,
+  "calls": []
+}
