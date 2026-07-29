@@ -12,12 +12,10 @@
   "stato_verifica": "fonte_ufficiale_non_accessibile",
   "criterio": "grant oncologici con submission aperta",
   "anno_round": null,
-  "stato_round": "aperto",
-  "indicatori_stato": [
-    "apply now"
-  ],
-  "submission_aperta": null,
-  "stato_submission": "aperta_deadline_non_rilevata",
+  "stato_round": "non_determinato",
+  "indicatori_stato": [],
+  "submission_aperta": false,
+  "stato_submission": "non_determinato",
   "deadline": null,
   "deadline_testo": null,
   "limite_domande": null,
