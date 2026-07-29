@@ -1,0 +1,24 @@
+{
+  "fonte": "Worldwide Cancer Research",
+  "pagina_monitorata": "https://www.worldwidecancerresearch.org/for-researchers/",
+  "canale_utilizzato": "bing_web_rss_fallback",
+  "fonti_fallback": [
+    "https://www.bing.com/search?q=site%3Aworldwidecancerresearch.org%2Ffor-researchers+%22Grant+Round%22&format=rss&setlang=en-GB&cc=GB",
+    "https://www.bing.com/search?q=site%3Aworldwidecancerresearch.org%2Ffor-researchers+%22applications%22+%22open%22&format=rss&setlang=en-GB&cc=GB",
+    "https://www.bing.com/search?q=site%3Aworldwidecancerresearch.org%2Ffor-researchers+%22application+deadline%22&format=rss&setlang=en-GB&cc=GB",
+    "https://www.bing.com/search?q=site%3Aworldwidecancerresearch.org%2Ffor-researchers+%22reached+our+cap%22&format=rss&setlang=en-GB&cc=GB"
+  ],
+  "url_ufficiali_rilevati": [],
+  "stato_verifica": "fonte_ufficiale_non_accessibile",
+  "criterio": "grant oncologici con submission aperta",
+  "anno_round": null,
+  "stato_round": "non_determinato",
+  "indicatori_stato": [],
+  "submission_aperta": false,
+  "stato_submission": "non_determinato",
+  "deadline": null,
+  "deadline_testo": null,
+  "limite_domande": null,
+  "numero_risultati": 0,
+  "calls": []
+}
