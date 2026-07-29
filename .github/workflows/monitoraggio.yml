@@ -49,6 +49,7 @@ jobs:
           python -m py_compile src/monitor_ricerca_finalizzata.py
           python -m py_compile src/monitor_worldwide_cancer_research.py
           python -m py_compile src/monitor_era4health.py
+          python -m py_compile src/monitor_fondazione_veronesi.py
 
           echo "La sintassi di tutti gli script Python e valida."
 
@@ -109,6 +110,25 @@ jobs:
             echo "Monitoraggio ERA4Health completato."
           else
             echo "Avviso: monitoraggio ERA4Health non completato."
+            echo "L'archivio precedente, se presente, non viene sovrascritto."
+            echo "Gli altri monitor continueranno normalmente."
+          fi
+
+      - name: Esegue il monitoraggio Fondazione Umberto Veronesi
+        id: fondazione_veronesi
+        continue-on-error: true
+        run: python src/monitor_fondazione_veronesi.py
+
+      - name: Segnala lo stato della Fondazione Umberto Veronesi
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ steps.fondazione_veronesi.outcome }}" = "success" ]; then
+            echo "Monitoraggio Fondazione Umberto Veronesi completato."
+          else
+            echo "Avviso: monitoraggio Fondazione Umberto Veronesi non completato."
             echo "L'archivio precedente, se presente, non viene sovrascritto."
             echo "Gli altri monitor continueranno normalmente."
           fi
@@ -183,6 +203,22 @@ jobs:
             echo "Questo non interrompe il workflow."
           fi
 
+      - name: Verifica archivio Fondazione Umberto Veronesi
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          file="data/fondazione_veronesi_calls.json"
+
+          if [ -f "$file" ]; then
+            python -m json.tool "$file" > /dev/null
+            echo "Archivio Fondazione Umberto Veronesi presente e valido."
+          else
+            echo "Archivio Fondazione Umberto Veronesi non ancora disponibile."
+            echo "Questo non interrompe il workflow."
+          fi
+
       - name: Mostra il riepilogo complessivo
         shell: bash
         run: |
@@ -198,6 +234,7 @@ jobs:
               Path("data/ricerca_finalizzata_calls.json"),
               Path("data/worldwide_cancer_research_calls.json"),
               Path("data/era4health_calls.json"),
+              Path("data/fondazione_veronesi_calls.json"),
           ]
 
           print("=" * 70)
@@ -297,6 +334,10 @@ jobs:
 
           if [ -f "data/era4health_calls.json" ]; then
             git add data/era4health_calls.json
+          fi
+
+          if [ -f "data/fondazione_veronesi_calls.json" ]; then
+            git add data/fondazione_veronesi_calls.json
           fi
 
           if git diff --cached --quiet; then
