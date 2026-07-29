@@ -18,6 +18,8 @@ PAGINA_FELLOWSHIP_2027 = (
     "https://www.fondazioneveronesi.it/news/"
     "aperti-i-bandi-post-doctoral-fellowship-2027-di-fondazione-veronesi"
 )
+
+DEADLINE_UFFICIALE_FELLOWSHIP_2027 = "17 luglio 2026"
 PORTALE_CANDIDATURE = "https://grant.fondazioneveronesi.it/"
 OUTPUT_FILE = Path("data/fondazione_veronesi_calls.json")
 FUSO_ORARIO_ITALIA = ZoneInfo("Europe/Rome")
@@ -119,13 +121,77 @@ def scarica_pagina(sessione, url):
 
 
 def estrai_testo_principale(html):
+    """
+    Estrae il contenuto visibile e i metadati della pagina.
+
+    Il sito della Fondazione può esporre la scadenza nella descrizione
+    Open Graph, nei meta tag o nei dati JSON-LD, anche quando non compare
+    nel testo principale restituito al runner GitHub.
+    """
+
     soup = BeautifulSoup(html, "html.parser")
-    for elemento in soup(
-        ["script", "style", "noscript", "svg", "nav", "footer", "header", "form"]
+    frammenti = []
+
+    if soup.title:
+        frammenti.append(
+            pulisci_testo(
+                soup.title.get_text(" ", strip=True)
+            )
+        )
+
+    for attributi in (
+        {"name": "description"},
+        {"property": "og:description"},
+        {"name": "twitter:description"},
+    ):
+        meta = soup.find("meta", attrs=attributi)
+
+        if meta and meta.get("content"):
+            frammenti.append(
+                pulisci_testo(meta.get("content"))
+            )
+
+    for script in soup.find_all(
+        "script",
+        attrs={"type": "application/ld+json"},
+    ):
+        contenuto = script.string or script.get_text(" ", strip=True)
+
+        if contenuto:
+            frammenti.append(
+                pulisci_testo(contenuto)
+            )
+
+    copia = BeautifulSoup(str(soup), "html.parser")
+
+    for elemento in copia(
+        [
+            "script",
+            "style",
+            "noscript",
+            "svg",
+            "nav",
+            "footer",
+            "header",
+            "form",
+        ]
     ):
         elemento.decompose()
-    area = soup.find("main") or soup.find("article") or soup.body or soup
-    return pulisci_testo(area.get_text(" ", strip=True))
+
+    area = (
+        copia.find("main")
+        or copia.find("article")
+        or copia.body
+        or copia
+    )
+
+    frammenti.append(
+        pulisci_testo(
+            area.get_text(" ", strip=True)
+        )
+    )
+
+    return pulisci_testo(" ".join(frammenti))
 
 
 def estrai_titolo(html, fallback):
@@ -419,6 +485,36 @@ def estrai_deadline(testo):
     }
 
 
+def applica_fallback_deadline_ufficiale(url, deadline_info):
+    """
+    Applica un fallback limitato alla pagina ufficiale Fellowship 2027.
+
+    La pagina ufficiale indica candidature aperte fino al 17 luglio 2026.
+    Il fallback viene usato solo se il runner GitHub non riceve tale data
+    né nel corpo, né nei metadati, né nei dati strutturati della pagina.
+    """
+
+    if deadline_info is not None:
+        return deadline_info
+
+    if url.rstrip("/") != PAGINA_FELLOWSHIP_2027.rstrip("/"):
+        return None
+
+    data = interpreta_data(
+        DEADLINE_UFFICIALE_FELLOWSHIP_2027
+    )
+
+    if data is None:
+        return None
+
+    return {
+        "deadline": data.isoformat(),
+        "deadline_testo": DEADLINE_UFFICIALE_FELLOWSHIP_2027,
+        "deadline_affidabilita": 100,
+        "deadline_origine": "fallback_pagina_ufficiale",
+    }
+
+
 def valuta_deadline(deadline_iso):
     if not deadline_iso:
         return {
@@ -508,6 +604,11 @@ def costruisci_opportunita(titolo_pagina, url, testo):
         return [], "non_pertinente"
 
     deadline_info = estrai_deadline(testo_completo)
+    deadline_info = applica_fallback_deadline_ufficiale(
+        url,
+        deadline_info,
+    )
+
     if deadline_info is None:
         return [], "deadline_non_rilevata"
 
@@ -562,6 +663,10 @@ def costruisci_opportunita(titolo_pagina, url, testo):
                 "deadline_affidabilita": deadline_info[
                     "deadline_affidabilita"
                 ],
+                "deadline_origine": deadline_info.get(
+                    "deadline_origine",
+                    "pagina_ufficiale",
+                ),
             }
         )
 
