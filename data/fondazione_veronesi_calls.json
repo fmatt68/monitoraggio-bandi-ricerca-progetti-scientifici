@@ -7,12 +7,12 @@
   "portale_candidature": "https://grant.fondazioneveronesi.it/",
   "criterio": "opportunita oncologiche con candidatura aperta",
   "totale_pagine_seme_accessibili": 2,
-  "totale_pagine_candidate": 1,
-  "totale_pagine_accessibili": 1,
+  "totale_pagine_candidate": 5,
+  "totale_pagine_accessibili": 5,
   "totale_pagine_non_analizzabili": 0,
   "totale_bandi_oncologici_rilevati": 2,
   "totale_bandi_scaduti": 2,
-  "totale_deadline_non_rilevate": 0,
+  "totale_deadline_non_rilevate": 3,
   "numero_risultati": 0,
   "calls": []
 }
