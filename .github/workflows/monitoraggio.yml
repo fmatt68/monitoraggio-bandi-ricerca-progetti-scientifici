@@ -397,3 +397,242 @@ jobs:
 
           echo
           echo "Aggiornamenti salvati correttamente nel repository."
+
+      - name: Crea il report email programmato
+        if: ${{ always() && github.event_name == 'schedule' }}
+        shell: bash
+        env:
+          STATO_RICERCA_FINALIZZATA: ${{ steps.ricerca_finalizzata.outcome }}
+          STATO_WORLDWIDE_CANCER_RESEARCH: ${{ steps.worldwide_cancer_research.outcome }}
+          STATO_ERA4HEALTH: ${{ steps.era4health.outcome }}
+          STATO_FONDAZIONE_VERONESI: ${{ steps.fondazione_veronesi.outcome }}
+          STATO_AIRC: ${{ steps.airc.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPOSITORY_NAME: ${{ github.repository }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import html
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          fonti = [
+              {
+                  "nome": "EP PerMed",
+                  "file": Path("data/ep_permed_calls.json"),
+                  "stato_step": "success",
+              },
+              {
+                  "nome": "EU Mission on Cancer",
+                  "file": Path("data/eu_mission_cancer_calls.json"),
+                  "stato_step": "success",
+              },
+              {
+                  "nome": "Ricerca Finalizzata",
+                  "file": Path("data/ricerca_finalizzata_calls.json"),
+                  "stato_step": os.environ.get(
+                      "STATO_RICERCA_FINALIZZATA",
+                      "non disponibile",
+                  ),
+              },
+              {
+                  "nome": "Worldwide Cancer Research",
+                  "file": Path("data/worldwide_cancer_research_calls.json"),
+                  "stato_step": os.environ.get(
+                      "STATO_WORLDWIDE_CANCER_RESEARCH",
+                      "non disponibile",
+                  ),
+              },
+              {
+                  "nome": "ERA4Health",
+                  "file": Path("data/era4health_calls.json"),
+                  "stato_step": os.environ.get(
+                      "STATO_ERA4HEALTH",
+                      "non disponibile",
+                  ),
+              },
+              {
+                  "nome": "Fondazione Umberto Veronesi",
+                  "file": Path("data/fondazione_veronesi_calls.json"),
+                  "stato_step": os.environ.get(
+                      "STATO_FONDAZIONE_VERONESI",
+                      "non disponibile",
+                  ),
+              },
+              {
+                  "nome": "AIRC",
+                  "file": Path("data/airc_calls.json"),
+                  "stato_step": os.environ.get(
+                      "STATO_AIRC",
+                      "non disponibile",
+                  ),
+              },
+          ]
+
+          righe_tabella = []
+          dettaglio_calls = []
+          totale_attive = 0
+          fonti_con_avvisi = 0
+
+          for fonte in fonti:
+              file_path = fonte["file"]
+              stato_step = fonte["stato_step"]
+              dati = None
+              errore = None
+
+              if file_path.exists():
+                  try:
+                      with file_path.open("r", encoding="utf-8") as file:
+                          dati = json.load(file)
+                  except (OSError, json.JSONDecodeError) as exc:
+                      errore = f"Archivio non leggibile: {exc}"
+              else:
+                  errore = "Archivio non disponibile"
+
+              if dati is not None:
+                  calls = dati.get("calls", [])
+                  numero = dati.get("numero_risultati", len(calls))
+                  stato_fonte = (
+                      dati.get("stato_indice")
+                      or dati.get("stato_submission")
+                      or dati.get("stato_round")
+                      or dati.get("canale_utilizzato")
+                      or "controllo completato"
+                  )
+              else:
+                  calls = []
+                  numero = 0
+                  stato_fonte = errore or "non disponibile"
+
+              totale_attive += numero
+
+              if stato_step not in {"success", "skipped"}:
+                  stato_visuale = f"Avviso: {stato_step}"
+                  colore = "#b45309"
+                  fonti_con_avvisi += 1
+              elif errore:
+                  stato_visuale = errore
+                  colore = "#b45309"
+                  fonti_con_avvisi += 1
+              else:
+                  stato_visuale = stato_fonte
+                  colore = "#166534"
+
+              righe_tabella.append(
+                  "<tr>"
+                  f"<td>{html.escape(fonte['nome'])}</td>"
+                  f"<td style='text-align:center'><strong>{numero}</strong></td>"
+                  f"<td style='color:{colore}'>{html.escape(str(stato_visuale))}</td>"
+                  "</tr>"
+              )
+
+              for call in calls:
+                  titolo = html.escape(
+                      str(call.get("titolo", "Titolo non disponibile"))
+                  )
+                  url = html.escape(str(call.get("url", "")), quote=True)
+                  deadline = html.escape(
+                      str(call.get("deadline", "Deadline non disponibile"))
+                  )
+
+                  if url:
+                      titolo_html = f"<a href='{url}'>{titolo}</a>"
+                  else:
+                      titolo_html = titolo
+
+                  dettaglio_calls.append(
+                      "<li>"
+                      f"<strong>{html.escape(fonte['nome'])}</strong>: "
+                      f"{titolo_html}<br>"
+                      f"Deadline: {deadline}"
+                      "</li>"
+                  )
+
+          data_utc = datetime.now(timezone.utc).strftime(
+              "%d/%m/%Y alle %H:%M UTC"
+          )
+          run_url = html.escape(os.environ["RUN_URL"], quote=True)
+          repository = html.escape(os.environ["REPOSITORY_NAME"])
+          run_number = html.escape(os.environ["RUN_NUMBER"])
+
+          if dettaglio_calls:
+              elenco_calls = "<ul>" + "".join(dettaglio_calls) + "</ul>"
+          else:
+              elenco_calls = "<p>Nessuna opportunità attiva archiviata.</p>"
+
+          report = f"""<!doctype html>
+          <html lang='it'>
+          <head>
+            <meta charset='utf-8'>
+          </head>
+          <body style='font-family:Arial,sans-serif;color:#1f2937;line-height:1.5'>
+            <h2>Report monitoraggio call oncologiche</h2>
+            <p>
+              Repository: <strong>{repository}</strong><br>
+              Esecuzione: <strong>#{run_number}</strong><br>
+              Data report: <strong>{data_utc}</strong>
+            </p>
+
+            <p style='font-size:18px'>
+              Totale opportunità attive: <strong>{totale_attive}</strong><br>
+              Fonti con avvisi tecnici: <strong>{fonti_con_avvisi}</strong>
+            </p>
+
+            <table style='border-collapse:collapse;width:100%;max-width:900px'>
+              <thead>
+                <tr style='background:#e5e7eb'>
+                  <th style='border:1px solid #d1d5db;padding:8px;text-align:left'>Fonte</th>
+                  <th style='border:1px solid #d1d5db;padding:8px'>Call attive</th>
+                  <th style='border:1px solid #d1d5db;padding:8px;text-align:left'>Stato</th>
+                </tr>
+              </thead>
+              <tbody>
+                {''.join(righe_tabella)}
+              </tbody>
+            </table>
+
+            <h3>Opportunità attive</h3>
+            {elenco_calls}
+
+            <p>
+              <a href='{run_url}'>Apri l'esecuzione completa su GitHub Actions</a>
+            </p>
+
+            <p style='font-size:12px;color:#6b7280'>
+              Report generato automaticamente dopo l'esecuzione programmata.
+              Le fonti indirette o non completamente verificabili sono indicate nello stato.
+            </p>
+          </body>
+          </html>
+          """
+
+          Path("report-email.html").write_text(
+              report,
+              encoding="utf-8",
+          )
+
+          print(
+              "Report email creato: "
+              f"{totale_attive} opportunita attive, "
+              f"{fonti_con_avvisi} fonti con avvisi."
+          )
+          PY
+
+      - name: Invia il report email programmato
+        if: ${{ always() && github.event_name == 'schedule' }}
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_ADDRESS }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "Report call oncologiche - esecuzione #${{ github.run_number }}"
+          to: ${{ secrets.EMAIL_ADDRESS }}
+          from: ${{ secrets.EMAIL_ADDRESS }}
+          html_body: file://report-email.html
+
