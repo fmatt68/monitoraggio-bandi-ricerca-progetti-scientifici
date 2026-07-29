@@ -1,17 +1,16 @@
 {
   "fonte": "Ministero della Salute - Ricerca Finalizzata",
-  "pagine_indice": [
-    "https://www.salute.gov.it/new/it/tema/sistema-ricerca-del-ssn-enti-e-finanziamenti/la-ricerca-finalizzata/",
-    "https://www.salute.gov.it/new/it/tema/sistema-ricerca-del-ssn-enti-e-finanziamenti/"
+  "canale_utilizzato": "bing_news_rss_fallback",
+  "fonti_feed": [
+    "https://www.bing.com/news/search?q=site%3Asalute.gov.it+%22ricerca+finalizzata%22&format=rss&setlang=it&cc=it",
+    "https://www.bing.com/news/search?q=site%3Asalute.gov.it+%22bando+ricerca+sanitaria%22&format=rss&setlang=it&cc=it",
+    "https://www.bing.com/news/search?q=site%3Asalute.gov.it+%22giovani+ricercatori%22+bando&format=rss&setlang=it&cc=it",
+    "https://www.bing.com/news/search?q=site%3Asalute.gov.it+%22starting+grant%22+ricerca&format=rss&setlang=it&cc=it"
   ],
-  "criterio": "oncologia e submission non scaduta",
-  "totale_pagine_candidate": 1,
-  "totale_pagine_accessibili": 0,
-  "totale_pagine_non_analizzabili": 1,
-  "totale_non_pertinenti": 0,
-  "totale_dichiarate_chiuse": 0,
-  "totale_scadute": 0,
-  "totale_deadline_non_rilevate": 0,
+  "criterio": "allerta Ricerca Finalizzata, pertinenza oncologica e deadline",
+  "nota": "I risultati da motore di ricerca sono segnalazioni verso pagine ufficiali salute.gov.it e non bandi confermati finché la pagina ufficiale non è accessibile.",
+  "totale_elementi_feed": 0,
+  "totale_candidati": 0,
   "numero_risultati": 0,
   "calls": []
 }
