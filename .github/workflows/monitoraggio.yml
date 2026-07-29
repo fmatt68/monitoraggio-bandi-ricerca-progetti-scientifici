@@ -40,6 +40,19 @@ jobs:
       - name: Installa le dipendenze
         run: python -m pip install -r requirements.txt
 
+        
+      - name: Verifica la sintassi degli script Python
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -m py_compile src/monitor.py
+          python -m py_compile src/monitor_cancer_mission.py
+          python -m py_compile src/monitor_ricerca_finalizzata.py
+
+          echo "La sintassi di tutti gli script Python è valida."
+
+          
       - name: Esegue il monitoraggio oncologico EP PerMed
         run: python src/monitor.py
 
