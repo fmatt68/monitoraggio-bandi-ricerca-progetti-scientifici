@@ -561,10 +561,28 @@ def main():
             candidati = estrai_link_calls_aperte(html_indice)
 
             if not candidati:
-                raise RuntimeError(
-                    "La pagina non dichiara esplicitamente l'assenza di call aperte, "
-                    "ma non e stato possibile estrarre collegamenti dalla sezione Open Calls."
+                print()
+                print(
+                    "Avviso: la pagina EP PerMed e stata scaricata, ma il contenuto "
+                    "ricevuto dal runner GitHub non consente di verificare la sezione Open Calls."
                 )
+                print(
+                    "Il precedente archivio viene conservato senza modifiche e il workflow prosegue."
+                )
+
+                percorso_riepilogo = os.environ.get("GITHUB_STEP_SUMMARY")
+                if percorso_riepilogo:
+                    with open(percorso_riepilogo, "a", encoding="utf-8") as file:
+                        file.write(
+                            "# Monitoraggio oncologico EP PerMed\n\n"
+                            "Stato del controllo: **indice non interpretabile dal runner GitHub**\n\n"
+                            "La pagina ha risposto con HTTP 200, ma non e stato possibile "
+                            "verificare la sezione Open Calls. L'archivio precedente e stato "
+                            "conservato senza modifiche.\n\n"
+                        )
+
+                print("Monitoraggio EP PerMed concluso con avviso, senza sovrascrivere il JSON.")
+                return
 
             print(f"Call aperte candidate trovate: {len(candidati)}")
             calls_correnti, statistiche = analizza_calls(sessione, candidati)
