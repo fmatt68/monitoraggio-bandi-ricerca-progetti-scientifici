@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import time
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,12 +8,18 @@ from urllib.parse import urljoin, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 import dateparser
+import feedparser
 import requests
 from bs4 import BeautifulSoup
 
 
 FONTE = (
     "Ministero della Salute - Ricerca Finalizzata"
+)
+
+FEED_RSS = (
+    "https://www.salute.gov.it/new/rss/"
+    "RSS_notizie.xml"
 )
 
 PAGINE_INDICE = [
@@ -29,23 +34,37 @@ PAGINE_INDICE = [
     ),
 ]
 
-PAGINE_CONOSCIUTE = [
-    (
-        "https://www.salute.gov.it/new/it/tema/"
-        "sistema-ricerca-del-ssn-enti-e-finanziamenti/"
-        "ricerca-finalizzata-2024-0/"
-    ),
-]
-
 OUTPUT_FILE = Path(
     "data/ricerca_finalizzata_calls.json"
 )
 
-REQUEST_DELAY_SECONDS = 0.5
-
 FUSO_ORARIO_ITALIA = ZoneInfo(
     "Europe/Rome"
 )
+
+
+TERMINI_RICERCA_FINALIZZATA = {
+    "ricerca finalizzata",
+    "bando ricerca finalizzata",
+    "bando della ricerca finalizzata",
+    "bando per la ricerca finalizzata",
+    "ricerca sanitaria finalizzata",
+    "progetti di ricerca sanitaria",
+    "bando ricerca sanitaria",
+    "giovani ricercatori",
+    "starting grant",
+}
+
+
+TERMINI_BANDO = {
+    "bando",
+    "avviso",
+    "call",
+    "presentazione dei progetti",
+    "presentazione delle domande",
+    "presentazione delle proposte",
+    "finanziamento di progetti",
+}
 
 
 TERMINI_ONCOLOGICI = {
@@ -97,27 +116,13 @@ TERMINI_ONCOLOGICI = {
     "neoplastica",
     "neoplastici",
     "neoplastiche",
-    "carcinoma",
     "carcinomi",
-    "sarcoma",
     "sarcomi",
     "leucemia",
     "linfoma",
     "linfomi",
     "mieloma",
     "metastasi",
-}
-
-
-TERMINI_BANDO = {
-    "bando",
-    "avviso",
-    "call",
-    "ricerca finalizzata",
-    "progetti di ricerca",
-    "presentazione dei progetti",
-    "presentazione delle domande",
-    "presentazione delle proposte",
 }
 
 
@@ -196,7 +201,8 @@ SCHEMI_DATA = [
 
 def crea_sessione():
     """
-    Crea una sessione HTTP riutilizzabile.
+    Crea una sessione HTTP per il feed RSS
+    e per le pagine del Ministero.
     """
 
     sessione = requests.Session()
@@ -211,8 +217,11 @@ def crea_sessione():
                 "progetti-scientifici)"
             ),
             "Accept": (
-                "text/html,application/xhtml+xml,"
-                "application/xml;q=0.9,*/*;q=0.8"
+                "application/rss+xml,"
+                "application/xml,"
+                "text/xml,"
+                "text/html;q=0.9,"
+                "*/*;q=0.8"
             ),
             "Accept-Language": (
                 "it-IT,it;q=0.9,en;q=0.7"
@@ -226,14 +235,22 @@ def crea_sessione():
 
 def pulisci_testo(testo):
     """
-    Elimina gli spazi ripetuti.
+    Rimuove tag HTML e spazi ripetuti.
     """
 
     if not testo:
         return ""
 
+    testo_senza_html = BeautifulSoup(
+        testo,
+        "html.parser",
+    ).get_text(
+        " ",
+        strip=True,
+    )
+
     return " ".join(
-        testo.split()
+        testo_senza_html.split()
     )
 
 
@@ -260,16 +277,19 @@ def normalizza_testo(testo):
     testo = testo.replace("–", "-")
     testo = testo.replace("—", "-")
 
-    return pulisci_testo(
-        testo
+    return " ".join(
+        testo.split()
     )
 
 
 def normalizza_url(indirizzo, pagina_base):
     """
-    Converte un URL relativo in assoluto
+    Converte un indirizzo relativo in URL assoluto
     ed elimina parametri e frammenti.
     """
+
+    if not indirizzo:
+        return ""
 
     url_assoluto = urljoin(
         pagina_base,
@@ -292,21 +312,49 @@ def normalizza_url(indirizzo, pagina_base):
     )
 
 
-def trova_indicatori_blocco(html):
+def trova_termini(testo, termini):
     """
-    Cerca gli indicatori delle pagine di protezione.
+    Restituisce i termini trovati nel testo,
+    rispettando i confini delle parole.
     """
 
-    soup = BeautifulSoup(
-        html,
-        "html.parser",
+    testo_normalizzato = normalizza_testo(
+        testo
     )
 
-    testo = normalizza_testo(
-        soup.get_text(
-            " ",
-            strip=True,
+    risultati = []
+
+    for termine in termini:
+        termine_normalizzato = normalizza_testo(
+            termine
         )
+
+        schema = (
+            r"(?<![a-z0-9])"
+            + re.escape(termine_normalizzato)
+            + r"(?![a-z0-9])"
+        )
+
+        if re.search(
+            schema,
+            testo_normalizzato,
+        ):
+            risultati.append(
+                termine
+            )
+
+    return sorted(
+        risultati
+    )
+
+
+def trova_indicatori_blocco(contenuto):
+    """
+    Riconosce le pagine di verifica Gcore.
+    """
+
+    testo = normalizza_testo(
+        pulisci_testo(contenuto)
     )
 
     return sorted(
@@ -316,12 +364,10 @@ def trova_indicatori_blocco(html):
     )
 
 
-def scarica_pagina(sessione, url):
+def scarica_contenuto(sessione, url):
     """
-    Scarica una pagina.
-
-    Se il sito restituisce la pagina di protezione
-    Gcore, genera un errore esplicito.
+    Scarica un contenuto e restituisce
+    il testo della risposta.
     """
 
     risposta = sessione.get(
@@ -332,28 +378,245 @@ def scarica_pagina(sessione, url):
 
     risposta.raise_for_status()
 
+    return risposta.text
+
+
+def scarica_pagina_html(sessione, url):
+    """
+    Scarica una pagina HTML e riconosce
+    eventuali blocchi Gcore.
+    """
+
+    contenuto = scarica_contenuto(
+        sessione,
+        url,
+    )
+
     indicatori = trova_indicatori_blocco(
-        risposta.text
+        contenuto
     )
 
     if indicatori:
         raise RuntimeError(
-            "Il sito ha restituito una pagina "
-            "di verifica o protezione: "
+            "Pagina bloccata dalla protezione "
+            "del sito: "
             + ", ".join(indicatori)
         )
 
     print(
-        "Pagina scaricata: "
-        f"HTTP {risposta.status_code} - {url}"
+        f"Pagina HTML accessibile: {url}"
     )
 
-    return risposta.text
+    return contenuto
+
+
+def leggi_feed_rss(sessione):
+    """
+    Scarica e interpreta il feed RSS ufficiale.
+
+    Restituisce:
+    - elementi del feed;
+    - titolo del feed;
+    - URL del feed.
+    """
+
+    print(
+        f"Controllo feed RSS: {FEED_RSS}"
+    )
+
+    contenuto = scarica_contenuto(
+        sessione,
+        FEED_RSS,
+    )
+
+    indicatori = trova_indicatori_blocco(
+        contenuto
+    )
+
+    if indicatori:
+        raise RuntimeError(
+            "Anche il feed RSS è stato bloccato: "
+            + ", ".join(indicatori)
+        )
+
+    feed = feedparser.parse(
+        contenuto
+    )
+
+    if feed.bozo and not feed.entries:
+        raise RuntimeError(
+            "Il feed RSS non è interpretabile: "
+            f"{feed.bozo_exception}"
+        )
+
+    print(
+        "Feed RSS letto correttamente."
+    )
+
+    print(
+        "Elementi presenti nel feed: "
+        f"{len(feed.entries)}"
+    )
+
+    titolo_feed = feed.feed.get(
+        "title",
+        "Notizie dal Ministero",
+    )
+
+    return (
+        feed.entries,
+        titolo_feed,
+    )
+
+
+def estrai_data_pubblicazione(entry):
+    """
+    Ricava la data di pubblicazione
+    di un elemento RSS in formato ISO.
+    """
+
+    struttura_data = (
+        entry.get("published_parsed")
+        or entry.get("updated_parsed")
+    )
+
+    if struttura_data:
+        data = datetime(
+            struttura_data.tm_year,
+            struttura_data.tm_mon,
+            struttura_data.tm_mday,
+            struttura_data.tm_hour,
+            struttura_data.tm_min,
+            struttura_data.tm_sec,
+            tzinfo=timezone.utc,
+        )
+
+        return data.isoformat()
+
+    data_testuale = (
+        entry.get("published")
+        or entry.get("updated")
+    )
+
+    if not data_testuale:
+        return None
+
+    data = dateparser.parse(
+        data_testuale,
+        languages=[
+            "it",
+            "en",
+        ],
+        settings={
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "TIMEZONE": "Europe/Rome",
+            "TO_TIMEZONE": "Europe/Rome",
+        },
+    )
+
+    if data is None:
+        return None
+
+    return data.isoformat()
+
+
+def estrai_elementi_rss(entries):
+    """
+    Cerca nel feed notizie relative
+    alla Ricerca Finalizzata.
+
+    Il filtro riguarda la tipologia di bando,
+    non ancora la pertinenza oncologica.
+    """
+
+    candidati = []
+    url_visti = set()
+
+    for entry in entries:
+        titolo = pulisci_testo(
+            entry.get(
+                "title",
+                "",
+            )
+        )
+
+        descrizione = pulisci_testo(
+            entry.get(
+                "summary",
+                entry.get(
+                    "description",
+                    "",
+                ),
+            )
+        )
+
+        collegamento = normalizza_url(
+            entry.get(
+                "link",
+                "",
+            ),
+            FEED_RSS,
+        )
+
+        testo_completo = (
+            f"{titolo} {descrizione}"
+        )
+
+        termini_trovati = trova_termini(
+            testo_completo,
+            TERMINI_RICERCA_FINALIZZATA,
+        )
+
+        if not termini_trovati:
+            continue
+
+        if not collegamento:
+            continue
+
+        if collegamento in url_visti:
+            continue
+
+        url_visti.add(
+            collegamento
+        )
+
+        candidati.append(
+            {
+                "fonte": FONTE,
+                "titolo": titolo,
+                "descrizione_rss": descrizione,
+                "url": collegamento,
+                "data_pubblicazione": (
+                    estrai_data_pubblicazione(
+                        entry
+                    )
+                ),
+                "termini_ricerca_finalizzata": (
+                    termini_trovati
+                ),
+                "origine_rilevazione": (
+                    "feed_rss_ufficiale"
+                ),
+            }
+        )
+
+    candidati.sort(
+        key=lambda elemento: (
+            elemento.get(
+                "data_pubblicazione"
+            )
+            or "",
+            elemento["titolo"].lower(),
+        ),
+        reverse=True,
+    )
+
+    return candidati
 
 
 def estrai_testo_principale(html):
     """
-    Estrae il testo principale della pagina.
+    Estrae il testo principale da una pagina HTML.
     """
 
     soup = BeautifulSoup(
@@ -390,276 +653,9 @@ def estrai_testo_principale(html):
     )
 
 
-def estrai_titolo(html):
-    """
-    Estrae il titolo della pagina.
-    """
-
-    soup = BeautifulSoup(
-        html,
-        "html.parser",
-    )
-
-    intestazione = soup.find(
-        ["h1", "h2"]
-    )
-
-    if intestazione:
-        titolo = pulisci_testo(
-            intestazione.get_text(
-                " ",
-                strip=True,
-            )
-        )
-
-        if titolo:
-            return titolo
-
-    if soup.title:
-        titolo = pulisci_testo(
-            soup.title.get_text(
-                " ",
-                strip=True,
-            )
-        )
-
-        titolo = re.sub(
-            r"^Ministero della Salute\s*-\s*",
-            "",
-            titolo,
-            flags=re.IGNORECASE,
-        )
-
-        if titolo:
-            return titolo
-
-    return "Bando Ricerca Finalizzata"
-
-
-def contiene_termine(testo, termini):
-    """
-    Verifica se almeno un termine è presente.
-    """
-
-    testo_normalizzato = normalizza_testo(
-        testo
-    )
-
-    return any(
-        normalizza_testo(termine)
-        in testo_normalizzato
-        for termine in termini
-    )
-
-
-def trova_parole_oncologiche(testo):
-    """
-    Restituisce le parole oncologiche trovate.
-    """
-
-    testo_normalizzato = normalizza_testo(
-        testo
-    )
-
-    risultati = []
-
-    for termine in TERMINI_ONCOLOGICI:
-        termine_normalizzato = normalizza_testo(
-            termine
-        )
-
-        schema = (
-            r"(?<![a-z0-9])"
-            + re.escape(termine_normalizzato)
-            + r"(?![a-z0-9])"
-        )
-
-        if re.search(
-            schema,
-            testo_normalizzato,
-        ):
-            risultati.append(
-                termine
-            )
-
-    return sorted(
-        risultati
-    )
-
-
-def collegamento_candidato(titolo, indirizzo):
-    """
-    Verifica se un collegamento può rappresentare
-    una pagina relativa alla Ricerca Finalizzata.
-    """
-
-    elementi = urlparse(
-        indirizzo
-    )
-
-    if elementi.netloc not in {
-        "salute.gov.it",
-        "www.salute.gov.it",
-    }:
-        return False
-
-    testo = normalizza_testo(
-        f"{titolo} {indirizzo}"
-    )
-
-    if "ricerca-finalizzata" in testo:
-        return True
-
-    if "ricerca finalizzata" in testo:
-        return True
-
-    return False
-
-
-def estrai_pagine_candidate(html, pagina_base):
-    """
-    Estrae le pagine candidate da una pagina indice.
-    """
-
-    soup = BeautifulSoup(
-        html,
-        "html.parser",
-    )
-
-    risultati = []
-    url_visti = set()
-
-    for link in soup.find_all(
-        "a",
-        href=True,
-    ):
-        titolo = pulisci_testo(
-            link.get_text(
-                " ",
-                strip=True,
-            )
-        )
-
-        indirizzo = normalizza_url(
-            link.get("href", ""),
-            pagina_base,
-        )
-
-        if not collegamento_candidato(
-            titolo,
-            indirizzo,
-        ):
-            continue
-
-        if indirizzo in url_visti:
-            continue
-
-        url_visti.add(
-            indirizzo
-        )
-
-        risultati.append(
-            {
-                "titolo_indice": titolo,
-                "url": indirizzo,
-            }
-        )
-
-    return risultati
-
-
-def raccogli_pagine_candidate(sessione):
-    """
-    Controlla le pagine indice e raccoglie
-    i possibili bandi.
-
-    Le pagine conosciute vengono aggiunte come fallback,
-    ma devono comunque risultare realmente accessibili
-    durante la fase di analisi.
-    """
-
-    risultati = []
-    url_visti = set()
-    indici_accessibili = 0
-    errori_indice = []
-
-    for pagina in PAGINE_INDICE:
-        print()
-        print(
-            f"Controllo indice: {pagina}"
-        )
-
-        try:
-            html = scarica_pagina(
-                sessione,
-                pagina,
-            )
-
-            indici_accessibili += 1
-
-            candidati = estrai_pagine_candidate(
-                html,
-                pagina,
-            )
-
-            for candidato in candidati:
-                url = candidato["url"]
-
-                if url in url_visti:
-                    continue
-
-                url_visti.add(
-                    url
-                )
-
-                risultati.append(
-                    candidato
-                )
-
-        except (
-            requests.RequestException,
-            RuntimeError,
-        ) as errore:
-            messaggio = (
-                f"{pagina}: {errore}"
-            )
-
-            errori_indice.append(
-                messaggio
-            )
-
-            print(
-                "Avviso: indice non accessibile. "
-                f"{errore}"
-            )
-
-    for pagina in PAGINE_CONOSCIUTE:
-        if pagina in url_visti:
-            continue
-
-        url_visti.add(
-            pagina
-        )
-
-        risultati.append(
-            {
-                "titolo_indice": (
-                    "Ricerca finalizzata"
-                ),
-                "url": pagina,
-            }
-        )
-
-    return (
-        risultati,
-        indici_accessibili,
-        errori_indice,
-    )
-
-
 def estrai_stringhe_data(testo):
     """
-    Estrae le stringhe che rappresentano date.
+    Estrae le possibili date presenti nel testo.
     """
 
     risultati = []
@@ -719,7 +715,6 @@ def calcola_punteggio_deadline(contesto):
         "esiti": -20,
         "avvio": -15,
         "webinar": -20,
-        "comunicazione": -10,
     }
 
     for criterio, valore in criteri_positivi.items():
@@ -733,85 +728,12 @@ def calcola_punteggio_deadline(contesto):
     return punteggio
 
 
-def estrai_candidati_deadline(testo):
-    """
-    Cerca date vicine a parole relative
-    alla presentazione delle proposte.
-    """
-
-    testo = pulisci_testo(
-        testo
-    )
-
-    candidati = []
-
-    for schema_data in SCHEMI_DATA:
-        schema = re.compile(
-            r"(.{0,220}"
-            + schema_data
-            + r".{0,220})",
-            flags=re.IGNORECASE,
-        )
-
-        for corrispondenza in schema.finditer(
-            testo
-        ):
-            contesto = pulisci_testo(
-                corrispondenza.group(1)
-            )
-
-            if not contiene_termine(
-                contesto,
-                TERMINI_SUBMISSION,
-            ):
-                continue
-
-            date = estrai_stringhe_data(
-                contesto
-            )
-
-            for stringa_data in date:
-                candidati.append(
-                    {
-                        "stringa_data": stringa_data,
-                        "contesto": contesto,
-                        "punteggio": (
-                            calcola_punteggio_deadline(
-                                contesto
-                            )
-                        ),
-                    }
-                )
-
-    candidati_unici = []
-    chiavi_viste = set()
-
-    for candidato in candidati:
-        chiave = (
-            candidato["stringa_data"],
-            candidato["contesto"],
-        )
-
-        if chiave in chiavi_viste:
-            continue
-
-        chiavi_viste.add(
-            chiave
-        )
-
-        candidati_unici.append(
-            candidato
-        )
-
-    return candidati_unici
-
-
 def interpreta_data(stringa_data):
     """
     Converte una data testuale in datetime.
 
-    Se non è presente un orario, viene utilizzata
-    la fine della giornata.
+    Se non è presente un orario,
+    utilizza la fine della giornata.
     """
 
     contiene_orario = bool(
@@ -871,34 +793,64 @@ def interpreta_data(stringa_data):
 
 def estrai_deadline(testo):
     """
-    Seleziona la deadline più affidabile.
+    Cerca la deadline di presentazione più affidabile.
     """
 
-    candidati = estrai_candidati_deadline(
-        testo
-    )
+    candidati = []
 
-    candidati_validi = []
-
-    for candidato in candidati:
-        data = interpreta_data(
-            candidato["stringa_data"]
+    for schema_data in SCHEMI_DATA:
+        schema_contesto = re.compile(
+            r"(.{0,220}"
+            + schema_data
+            + r".{0,220})",
+            flags=re.IGNORECASE,
         )
 
-        if data is None:
-            continue
+        for corrispondenza in schema_contesto.finditer(
+            testo
+        ):
+            contesto = pulisci_testo(
+                corrispondenza.group(1)
+            )
 
-        candidati_validi.append(
-            {
-                **candidato,
-                "data": data,
-            }
-        )
+            termini_submission = trova_termini(
+                contesto,
+                TERMINI_SUBMISSION,
+            )
 
-    if not candidati_validi:
+            if not termini_submission:
+                continue
+
+            stringhe_data = estrai_stringhe_data(
+                contesto
+            )
+
+            for stringa_data in stringhe_data:
+                data = interpreta_data(
+                    stringa_data
+                )
+
+                if data is None:
+                    continue
+
+                candidati.append(
+                    {
+                        "data": data,
+                        "stringa_data": (
+                            stringa_data
+                        ),
+                        "punteggio": (
+                            calcola_punteggio_deadline(
+                                contesto
+                            )
+                        ),
+                    }
+                )
+
+    if not candidati:
         return None
 
-    candidati_validi.sort(
+    candidati.sort(
         key=lambda elemento: (
             elemento["punteggio"],
             elemento["data"],
@@ -906,7 +858,7 @@ def estrai_deadline(testo):
         reverse=True,
     )
 
-    migliore = candidati_validi[0]
+    migliore = candidati[0]
 
     if migliore["punteggio"] < 25:
         return None
@@ -931,9 +883,9 @@ def valuta_deadline(deadline_iso):
 
     if not deadline_iso:
         return {
-            "submission_aperta": False,
+            "submission_aperta": None,
             "stato_submission": (
-                "deadline_non_rilevata"
+                "deadline_non_verificata"
             ),
             "giorni_residui": None,
         }
@@ -945,7 +897,7 @@ def valuta_deadline(deadline_iso):
 
     except ValueError:
         return {
-            "submission_aperta": False,
+            "submission_aperta": None,
             "stato_submission": (
                 "deadline_non_valida"
             ),
@@ -957,13 +909,9 @@ def valuta_deadline(deadline_iso):
             tzinfo=FUSO_ORARIO_ITALIA
         )
 
-    adesso = datetime.now(
-        timezone.utc
-    )
-
     differenza = (
         deadline.astimezone(timezone.utc)
-        - adesso
+        - datetime.now(timezone.utc)
     )
 
     secondi = differenza.total_seconds()
@@ -989,610 +937,527 @@ def valuta_deadline(deadline_iso):
     }
 
 
-def trova_indicatori_chiusura(testo):
+def verifica_candidato_html(
+    sessione,
+    candidato,
+):
     """
-    Cerca indicatori espliciti della conclusione
-    del bando.
+    Prova a verificare la notizia RSS
+    aprendo la pagina collegata.
+
+    Se Gcore blocca la pagina, il candidato
+    viene conservato come verifica bloccata.
     """
 
-    testo_normalizzato = normalizza_testo(
-        testo
+    try:
+        html = scarica_pagina_html(
+            sessione,
+            candidato["url"],
+        )
+
+    except (
+        requests.RequestException,
+        RuntimeError,
+    ) as errore:
+        return {
+            **candidato,
+            "stato_ver**ica": (
+                "verifica**loccata"
+            ),
+         ** "motivo_verifica": str(errore),
+**          "rilevanza": (
+        **      "bando_generale_da_verifica**"
+            ),
+            "par**e_chiave_oncologiche": [],
+      **    "submission_aperta": None,
+  **        "stato_submission": (
+   **           "non_verificato"
+     **     ),
+            "deadline": N**e,
+            "deadline_testo": **ne,
+        }
+
+    testo = estrai**esto_principale(
+        html
+   **
+
+    testo_completo = (
+        **{candidato['titolo']} "
+        f**candidato['descrizione_rss']} "
+ **     f"{testo}"
     )
 
-    return sorted(
-        termine
-        for termine in TERMINI_CHIUSURA
-        if normalizza_testo(termine)
-        in testo_normalizzato
+    indica**ri_chiusura = trova_termini(
+    **  testo_completo,
+        TERMINI**HIUSURA,
     )
 
+    parole_oncolo**che = trova_termini(
+        test**completo,
+        TERMINI_ONCOLOG**I,
+    )
 
-def analizza_candidati(sessione, candidati):
-    """
-    Analizza le pagine candidate.
+    informazioni_deadli** = estrai_deadline(
+        testo**ompleto
+    )
 
-    Vengono salvati soltanto bandi:
-    - effettivamente accessibili;
-    - relativi alla ricerca;
-    - pertinenti all'oncologia;
-    - non dichiarati conclusi;
-    - con deadline futura.
-    """
+    if indicatori_**iusura:
+        return {
+        **  **candidato,
+            "stato**erifica": "confermato",
+         ** "rilevanza": (
+                "**cologica"
+                if paro**_oncologiche
+                else**bando_generale"
+            ),
+  **        "parole_chiave_oncologich**: (
+                parole_oncolo**che
+            ),
+            "s**mission_aperta": False,
+         ** "stato_submission": (
+          **    "dichiarata_conclusa"
+       **   ),
+            "indicatori_chi**ura": (
+                indicator**chiusura
+            ),
+         ** "deadline": None,
+            "d**dline_testo": None,
+        }
 
-    risultati = []
-
-    statistiche = {
-        "candidate": len(candidati),
-        "pagine_accessibili": 0,
-        "pagine_non_analizzabili": 0,
-        "non_bandi": 0,
-        "non_pertinenti": 0,
-        "dichiarate_chiuse": 0,
-        "scadute": 0,
-        "deadline_non_rilevate": 0,
-        "deadline_non_valide": 0,
-    }
-
-    errori_pagine = []
-
-    for numero, candidato in enumerate(
-        candidati,
-        start=1,
-    ):
-        print()
-        print(
-            f"Analisi {numero}/{len(candidati)}: "
-            f"{candidato['url']}"
-        )
-
-        try:
-            html = scarica_pagina(
-                sessione,
-                candidato["url"],
-            )
-
-        except (
-            requests.RequestException,
-            RuntimeError,
-        ) as errore:
-            statistiche[
-                "pagine_non_analizzabili"
-            ] += 1
-
-            messaggio = (
-                f"{candidato['url']}: {errore}"
-            )
-
-            errori_pagine.append(
-                messaggio
-            )
-
-            print(
-                "  Pagina non analizzabile: "
-                f"{errore}"
-            )
-
-            continue
-
-        statistiche[
-            "pagine_accessibili"
-        ] += 1
-
-        titolo = estrai_titolo(
-            html
-        )
-
-        testo = estrai_testo_principale(
-            html
-        )
-
-        testo_completo = (
-            f"{titolo} {testo}"
-        )
-
-        if not contiene_termine(
-            testo_completo,
-            TERMINI_BANDO,
-        ):
-            statistiche[
-                "non_bandi"
-            ] += 1
-
-            print(
-                "  Esclusa: la pagina non sembra "
-                "riguardare un bando."
-            )
-
-            continue
-
-        parole_oncologiche = (
-            trova_parole_oncologiche(
-                testo_completo
-            )
-        )
-
-        if not parole_oncologiche:
-            statistiche[
-                "non_pertinenti"
-            ] += 1
-
-            print(
-                "  Esclusa: nessun termine "
-                "oncologico rilevato."
-            )
-
-            continue
-
-        indicatori_chiusura = (
-            trova_indicatori_chiusura(
-                testo_completo
-            )
-        )
-
-        if indicatori_chiusura:
-            statistiche[
-                "dichiarate_chiuse"
-            ] += 1
-
-            print(
-                "  Esclusa: indicatori di "
-                "conclusione rilevati: "
-                + ", ".join(
-                    indicatori_chiusura
-                )
-            )
-
-            continue
-
-        informazioni_deadline = (
-            estrai_deadline(
-                testo_completo
-            )
-        )
-
-        if informazioni_deadline is None:
-            statistiche[
-                "deadline_non_rilevate"
-            ] += 1
-
-            print(
-                "  Esclusa prudenzialmente: "
-                "deadline non rilevata."
-            )
-
-            continue
-
-        valutazione = valuta_deadline(
-            informazioni_deadline[
+  **if informazioni_deadline:
+       **alutazione = valuta_deadline(
+   **       informazioni_deadline[
                 "deadline"
             ]
         )
 
-        print(
-            "  Deadline rilevata: "
-            f"{informazioni_deadline['deadline']}"
-        )
+        return {
+    **      **candidato,
+            "s**to_verifica": "confermato",
+     **     "rilevanza": (
+             ** "oncologica"
+                if **role_oncologiche
+                **se "bando_generale"
+            )**            "parole_chiave_oncolo**che": (
+                parole_on**logiche
+            ),
+          **"submission_aperta": (
+          **    valutazione[
+                    "submission_aperta"
+                ]
+            ),
+            "**ato_submission": (
+              **valutazione[
+                    "stato_submission"
+                ]
+            ),
+            "deadl**e": (
+                informazion**deadline[
+                    "deadline"
+                ]
+         ** ),
+            "deadline_testo":**
+                informazioni_dea**ine[
+                    "deadline_testo"
+                ]
+        **  ),
+        }
 
-        print(
-            "  Deadline originale: "
-            f"{informazioni_deadline['deadline_testo']}"
-        )
+    return {
+    **  **candidato,
+        "stato_ver**ica": (
+            "pagina_acces**bile_deadline_non_rilevata"
+     ** ),
+        "rilevanza": (
+      **    "oncologica"
+            if p**ole_oncologiche
+            else **ando_generale_da_verificare"
+    **  ),
+        "parole_chiave_oncol**iche": (
+            parole_oncol**iche
+        ),
+        "submissi**_aperta": None,
+        "stato_su**ission": (
+            "deadline_**n_verificata"
+        ),
+        **eadline": None,
+        "deadline**esto": None,
+    }
 
-        print(
-            "  Stato submission: "
-            f"{valutazione['stato_submission']}"
-        )
 
-        if (
-            valutazione["stato_submission"]
-            == "scaduta"
-        ):
-            statistiche[
-                "scadute"
-            ] += 1
+def selezion**risultati_da_archiviare(
+    cand**ati_verificati,
+):
+    """
+    Co**erva:
 
-            print(
-                "  Esclusa: submission scaduta."
-            )
+    - bandi confermati con**ubmission aperta;
+    - candidati**SS la cui verifica è bloccata;
+  **- candidati con pagina accessibil**ma
+      deadline non rilevata.
 
+**  Esclude i bandi confermati come**caduti
+    o conclusi.
+    """
+
+ ** risultati = []
+
+    for candidat**in candidati_verificati:
+        **ato_submission = candidato.get(
+ **         "stato_submission"
+     ** )
+
+        if stato_submission i**{
+            "scaduta",
+        **  "dichiarata_conclusa",
+        **
             continue
 
-        if (
-            valutazione["stato_submission"]
-            == "deadline_non_valida"
-        ):
-            statistiche[
-                "deadline_non_valide"
-            ] += 1
-
-            print(
-                "  Esclusa: deadline non valida."
-            )
-
-            continue
-
-        if valutazione[
-            "submission_aperta"
-        ]:
-            risultati.append(
-                {
-                    "fonte": FONTE,
-                    "titolo": titolo,
-                    "url": candidato["url"],
-                    "rilevanza": "oncologica",
-                    "parole_chiave_oncologiche": (
-                        parole_oncologiche
-                    ),
-                    "submission_aperta": True,
-                    "stato_submission": "aperta",
-                    "deadline": (
-                        informazioni_deadline[
-                            "deadline"
-                        ]
-                    ),
-                    "deadline_testo": (
-                        informazioni_deadline[
-                            "deadline_testo"
-                        ]
-                    ),
-                    "deadline_affidabilita": (
-                        informazioni_deadline[
-                            "deadline_affidabilita"
-                        ]
-                    ),
-                }
-            )
-
-            print(
-                "  Inclusa: bando oncologico "
-                "con submission aperta."
-            )
-
-        if numero < len(candidati):
-            time.sleep(
-                REQUEST_DELAY_SECONDS
-            )
+        ri**ltati.append(
+            candida**
+        )
 
     risultati.sort(
-        key=lambda elemento: (
-            elemento["deadline"],
+ **     key=lambda elemento: (
+     **     0
+            if elemento.ge**
+                "submission_aper**"
+            )
+            is Tr**
+            else 1,
+            **emento.get(
+                "data**ubblicazione"
+            )
+     **     or "",
             elemento["titolo"].lower(),
-            elemento["url"],
-        )
+        ),
+     ** reverse=False,
     )
 
-    return (
-        risultati,
-        statistiche,
-        errori_pagine,
-    )
+    return**isultati
 
 
-def carica_risultati_precedenti():
+def carica_risultati_p**cedenti():
     """
-    Legge l'archivio precedente.
+    Legge l'ar**ivio precedente.
     """
 
-    if not OUTPUT_FILE.exists():
-        print(
-            "Nessun archivio precedente "
-            "Ricerca Finalizzata trovato."
+    if **t OUTPUT_FILE.exists():
+        p**nt(
+            "Nessun archivio **ecedente "
+            "Ricerca F**alizzata trovato."
         )
 
-        return []
+   **   return []
 
     try:
-        with OUTPUT_FILE.open(
-            "r",
+        wi** OUTPUT_FILE.open(
+            "r**
             encoding="utf-8",
-        ) as file:
-            dati = json.load(
+  **    ) as file:
+            dati =**son.load(
                 file
-            )
+  **        )
 
-        risultati = dati.get(
+        risultati = da**.get(
             "calls",
-            [],
+      **    [],
         )
 
-        if not isinstance(
-            risultati,
-            list,
+        if not**sinstance(
+            risultati,**           list,
         ):
-            return []
+     **     return []
 
         print(
-            "Risultati nell'archivio precedente: "
-            f"{len(risultati)}"
+  **        "Risultati nell'archivio **ecedente: "
+            f"{len(ri**ltati)}"
         )
 
-        return risultati
+        retur**risultati
 
     except (
-        OSError,
-        json.JSONDecodeError,
+        O**rror,
+        json.JSONDecodeErro**
     ) as errore:
         print(
-            "Impossibile leggere "
-            "l'archivio precedente: "
+**          "Impossibile leggere "
+**          "l'archivio precedente:**
             f"{errore}"
-        )
-
+        **
         return []
 
 
-def identifica_nuove_calls(precedenti, correnti):
+def identifi**_nuovi_risultati(
+    precedenti,**   correnti,
+):
     """
-    Identifica i nuovi bandi sulla base dell'URL.
+    Ident**ica i nuovi risultati in base all**RL.
     """
 
-    url_precedenti = {
+    url_precedenti =**
         elemento.get("url")
-        for elemento in precedenti
-        if elemento.get("url")
+    **  for elemento in precedenti
+    **  if elemento.get("url")
     }
 
-    return [
+ ** return [
         elemento
         for elemento in correnti
-        if elemento["url"] not in url_precedenti
+        if elemento.get("url")
+        not ** url_precedenti
     ]
 
 
-def identifica_calls_rimosse(precedenti, correnti):
+def ident**ica_risultati_rimossi(
+    preced**ti,
+    correnti,
+):
     """
-    Identifica i bandi non più attivi.
+    **entifica i risultati non più pres**ti.
     """
 
-    url_correnti = {
-        elemento.get("url")
-        for elemento in correnti
-        if elemento.get("url")
+    url_correnti = {**       elemento.get("url")
+      **for elemento in correnti
+        ** elemento.get("url")
     }
 
-    return [
+    r**urn [
         elemento
         for elemento in precedenti
         if elemento.get("url")
-        and elemento["url"] not in url_correnti
+        and el**ento.get("url")
+        not in ur**correnti
     ]
 
 
-def identifica_calls_modificate(precedenti, correnti):
+def identifica_r**ultati_modificati(
+    precedenti**    correnti,
+):
     """
-    Identifica modifiche ai dati stabili.
-    """
+    Iden**fica modifiche ai campi stabili.
+**  """
 
-    precedenti_per_url = {
-        elemento.get("url"): elemento
-        for elemento in precedenti
+    precedenti_per_url = {**       elemento.get("url"): eleme**o
+        for elemento in precede**i
         if elemento.get("url")
-    }
+**  }
 
     campi = [
         "titolo",
-        "deadline",
-        "stato_submission",
+        "stato_verifica",
         "rilevanza",
+        "submission_aperta",
+        "stato_submission",
+        "deadline",
     ]
 
-    modificati = []
+    m**ificati = []
 
-    for corrente in correnti:
-        precedente = precedenti_per_url.get(
-            corrente.get("url")
+    for corrente in**orrenti:
+        precedente = pre**denti_per_url.get(
+            co**ente.get("url")
         )
 
-        if not precedente:
-            continue
+      **if not precedente:
+            co**inue
 
-        campi_modificati = [
-            campo
+        campi_modificati = **            campo
             for campo in campi
             if precedente.get(campo)
-            != corrente.get(campo)
+            != co**ente.get(campo)
         ]
 
-        if campi_modificati:
-            modificati.append(
-                {
-                    "titolo": corrente["titolo"],
-                    "url": corrente["url"],
-                    "campi_modificati": (
-                        campi_modificati
-                    ),
+      **if campi_modificati:
+            **dificati.append(
+                **                    "titolo": cor**nte[
+                        "titolo"
+                    ],
+       **           "url": corrente[
+                        "url"
+                    ],
+                    "c**pi_modificati": (
+               **       campi_modificati
+         **         ),
                 }
-            )
+   **       )
 
     return modificati
 
-
-def salva_risultati(risultati, statistiche):
-    """
-    Salva il JSON soltanto dopo che almeno
-    una pagina è stata realmente analizzata.
-    """
-
-    OUTPUT_FILE.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    dati = {
-        "fonte": FONTE,
-        "pagine_indice": PAGINE_INDICE,
-        "criterio": (
-            "oncologia e submission non scaduta"
-        ),
-        "monitoraggio_completato": True,
-        "totale_pagine_candidate": (
-            statistiche["candidate"]
-        ),
-        "totale_pagine_accessibili": (
-            statistiche["pagine_accessibili"]
-        ),
-        "totale_pagine_non_analizzabili": (
-            statistiche[
-                "pagine_non_analizzabili"
-            ]
-        ),
-        "totale_non_bandi": (
-            statistiche["non_bandi"]
-        ),
-        "totale_non_pertinenti": (
-            statistiche["non_pertinenti"]
-        ),
-        "totale_dichiarate_chiuse": (
-            statistiche[
-                "dichiarate_chiuse"
-            ]
-        ),
-        "totale_scadute": (
-            statistiche["scadute"]
-        ),
-        "totale_deadline_non_rilevate": (
-            statistiche[
-                "deadline_non_rilevate"
-            ]
-        ),
-        "totale_deadline_non_valide": (
-            statistiche[
-                "deadline_non_valide"
-            ]
-        ),
-        "numero_risultati": len(
-            risultati
-        ),
-        "calls": risultati,
-    }
-
-    with OUTPUT_FILE.open(
-        "w",
-        encoding="utf-8",
-    ) as file:
-        json.dump(
-            dati,
-            file,
-            ensure_ascii=False,
-            indent=2,
-        )
-
-        file.write("\n")
-
-
-def formatta_deadline(deadline_iso):
-    """
-    Converte una deadline ISO in formato leggibile.
-    """
-
-    if not deadline_iso:
-        return "non rilevata"
-
-    try:
-        deadline = datetime.fromisoformat(
-            deadline_iso
-        )
-
-    except ValueError:
-        return deadline_iso
-
-    if deadline.tzinfo is None:
-        deadline = deadline.replace(
-            tzinfo=FUSO_ORARIO_ITALIA
-        )
-
-    return deadline.astimezone(
-        FUSO_ORARIO_ITALIA
-    ).strftime(
-        "%d/%m/%Y alle %H:%M %Z"
-    )
-
-
-def calcola_giorni_residui(deadline_iso):
-    """
-    Calcola i giorni residui senza salvarli nel JSON.
-    """
-
-    valutazione = valuta_deadline(
-        deadline_iso
-    )
-
-    return valutazione.get(
-        "giorni_residui"
-    )
-
-
-def aggiungi_riepilogo_github(
-    risultati,
-    nuove_calls,
-    calls_rimosse,
-    calls_modificate,
-    statistiche,
-    errori_indice,
-    errori_pagine,
+**ef salva_risultati(
+    risultati**    numero_elementi_feed,
+    num**o_candidati_rss,
 ):
     """
-    Aggiunge il riepilogo al Job summary.
+    S**va il risultato del controllo RSS**
+    Zero risultati significa che**el feed corrente
+    non sono sta** trovate segnalazioni pertinenti,**   non che sia stata verificata l**ntera sezione HTML.
     """
 
-    percorso = os.environ.get(
-        "GITHUB_STEP_SUMMARY"
+    **TPUT_FILE.parent.mkdir(
+        p**ents=True,
+        exist_ok=True,**   )
+
+    confermati_aperti = sum**        elemento.get(
+           **submission_aperta"
+        )
+    **  is True
+        for elemento in**isultati
     )
 
-    if not percorso:
+    verifiche_blo**ate = sum(
+        elemento.get(
+**          "stato_verifica"
+      **)
+        == "verifica_bloccata"
+**      for elemento in risultati
+ ** )
+
+    dati = {
+        "fonte":**ONTE,
+        "feed_rss": FEED_RS**
+        "criterio": (
+          **"allerta Ricerca Finalizzata, "
+ **         "pertinenza oncologica e**eadline"
+        ),
+        "moni**raggio_rss_completato": True,
+   **   "nota": (
+            "L'assen** di risultati indica che "
+      **    "nel feed RSS corrente non so** state "
+            "trovate seg**lazioni pertinenti. "
+           **Non certifica l'assenza assoluta **            "di bandi sul portale**
+        ),
+        "totale_eleme**i_feed": (
+            numero_ele**nti_feed
+        ),
+        "tota**_candidati_rss": (
+            nu**ro_candidati_rss
+        ),
+     ** "totale_confermati_aperti": (
+  **        confermati_aperti
+       **,
+        "totale_verifiche_blocc**e": (
+            verifiche_blocc**e
+        ),
+        "numero_risu**ati": len(
+            risultati
+**      ),
+        "calls": risulta**,
+    }
+
+    with OUTPUT_FILE.ope**
+        "w",
+        encoding="u**-8",
+    ) as file:
+        json.**mp(
+            dati,
+           **ile,
+            ensure_ascii=Fal**,
+            indent=2,
+        )**        file.write("\n")
+
+
+def fo**atta_deadline(deadline_iso):
+    **"
+    Converte la deadline in for**to leggibile.
+    """
+
+    if not**eadline_iso:
+        return "non **rificata"
+
+    try:
+        deadl**e = datetime.fromisoformat(
+     **     deadline_iso
+        )
+
+    **cept ValueError:
+        return d**dline_iso
+
+    if deadline.tzinfo**s None:
+        deadline = deadli**.replace(
+            tzinfo=FUSO**RARIO_ITALIA
+        )
+
+    retur**deadline.astimezone(
+        FUSO**RARIO_ITALIA
+    ).strftime(
+    **  "%d/%m/%Y alle %H:%M %Z**    )
+
+
+def aggiungi_riepilogo_gi**ub(
+    risultati,
+    candidati_**s,
+    nuovi,
+    rimossi,
+    mo**ficati,
+    numero_elementi_feed,**:
+    """
+    Aggiunge il riepilo** al Job summary.
+    """
+
+    per**rso = os.environ.get(
+        "GI**UB_STEP_SUMMARY"
+    )
+
+    if no**percorso:
         return
 
-    righe = [
+    con**rmati_aperti = [
+        elemento
+        for elemento in risultati
+        if elemento.get(
+            "submission_aperta"
+        )
+   **   is True
+    ]
+
+    verifiche_b**ccate = [
+        elemento
+        for elemento in risultati
+        if elemento.get(
+            "stato_verifica"
+        )
+        == "v**ifica_bloccata"
+    ]
+
+    righe **[
         "# Ricerca Finalizzata",
         "",
+        "Canale controllato: "
+        "**feed RSS ufficiale del Ministero**",
+        "",
         (
-            "Bandi oncologici con submission "
-            f"aperta: **{len(risultati)}**"
+            "Elementi presenti nel feed: "
+            f"**{numero_elementi_feed}**"
         ),
         "",
         (
-            "Pagine candidate: "
-            f"**{statistiche['candidate']}**"
+            "Notizie candidate: "
+            f"**{len(candidati_rss)}**"
+        ),
+        "",
+        **            "Bandi confermati con submission aperta: "
+            f"**{len(confermati_aperti)}**"
+        ),
+        "",
+       **
+            "Candidati con verif**a bloccata: "
+           **"**{len(verifiche_bloccate)}**"
         ),
         "",
         (
-            "Pagine realmente analizzate: "
-            f"**{statistiche['pagine_accessibili']}**"
+            "Nuovi risultati: "
+            f"**{len(nuovi)}**"
         ),
         "",
         (
-            "Pagine non analizzabili: "
-            f"**{statistiche['pagine_non_analizzabili']}**"
+            "Risultati modificati: "
+            f"**{len(modificati)}**"
         ),
         "",
         (
-            "Bandi esclusi come conclusi: "
-            f"**{statistiche['dichiarate_chiuse']}**"
-        ),
-        "",
-        (
-            "Bandi esclusi perché scaduti: "
-            f"**{statistiche['scadute']}**"
-        ),
-        "",
-        (
-            "Bandi esclusi perché non oncologici: "
-            f"**{statistiche['non_pertinenti']}**"
-        ),
-        "",
-        (
-            "Nuovi bandi attivi: "
-            f"**{len(nuove_calls)}**"
-        ),
-        "",
-        (
-            "Bandi modificati: "
-            f"**{len(calls_modificate)}**"
-        ),
-        "",
-        (
-            "Bandi non più attivi: "
-            f"**{len(calls_rimosse)}**"
+            "Risultati rimossi: "
+            f"**{len(rimossi)}**"
         ),
         "",
     ]
@@ -1600,29 +1465,35 @@ def aggiungi_riepilogo_github(
     if risultati:
         righe.extend(
             [
-                "## Bandi attivi",
+                "## Risultati correnti",
                 "",
             ]
         )
 
         for risultato in risultati:
-            giorni = calcola_giorni_residui(
-                risultato["deadline"]
-            )
-
             righe.append(
                 f"- [{risultato['titolo']}]"
                 f"({risultato['url']})"
             )
 
             righe.append(
-                "  - Deadline: "
-                f"**{formatta_deadline(risultato['deadline'])}**"
+                "  - Stato verifica: "
+                f"**{risultato['stato_verifica']}**"
             )
 
             righe.append(
-                "  - Giorni residui: "
-                f"**{giorni}**"
+                "  - Rilevanza: "
+                f"**{risultato['rilevanza']}**"
+            )
+
+            righe.append(
+                "  - Stato submission: "
+                f"**{risultato['stato_submission']}**"
+            )
+
+            righe.append(
+                "  - Deadline: "
+                f"**{formatta_deadline(risultato.get('deadline'))}**"
             )
 
         righe.append("")
@@ -1630,31 +1501,12 @@ def aggiungi_riepilogo_github(
     else:
         righe.extend(
             [
-                "Nessun bando oncologico "
-                "con submission aperta rilevato.",
+                "Nessuna nuova segnalazione relativa "
+                "alla Ricerca Finalizzata è presente "
+                "nel feed RSS corrente.",
                 "",
             ]
         )
-
-    errori = (
-        errori_indice
-        + errori_pagine
-    )
-
-    if errori:
-        righe.extend(
-            [
-                "## Avvisi tecnici",
-                "",
-            ]
-        )
-
-        for errore in errori:
-            righe.append(
-                f"- {errore}"
-            )
-
-        righe.append("")
 
     with open(
         percorso,
@@ -1666,17 +1518,21 @@ def aggiungi_riepilogo_github(
         )
 
 
-def stampa_elenco(titolo, risultati):
+def stampa_risultati(risultati):
     """
-    Stampa un elenco leggibile nel log.
+    Stampa i risultati nel log.
     """
 
     print()
-    print(titolo)
-    print("-" * len(titolo))
+    print("RISULTATI RSS RICERCA FINALIZZATA")
+    print("--------------------------------")
 
     if not risultati:
-        print("Nessun risultato.")
+        print(
+            "Nessuna segnalazione pertinente "
+            "nel feed RSS corrente."
+        )
+
         return
 
     for numero, risultato in enumerate(
@@ -1692,22 +1548,23 @@ def stampa_elenco(titolo, risultati):
         )
 
         print(
+            "   Stato verifica: "
+            f"{risultato['stato_verifica']}"
+        )
+
+        print(
+            "   Rilevanza: "
+            f"{risultato['rilevanza']}"
+        )
+
+        print(
+            "   Stato submission: "
+            f"{risultato['stato_submission']}"
+        )
+
+        print(
             "   Deadline: "
-            f"{formatta_deadline(risultato['deadline'])}"
-        )
-
-        print(
-            "   Giorni residui: "
-            f"{calcola_giorni_residui(risultato['deadline'])}"
-        )
-
-        print(
-            "   Termini oncologici: "
-            + ", ".join(
-                risultato[
-                    "parole_chiave_oncologiche"
-                ]
-            )
+            f"{formatta_deadline(risultato.get('deadline'))}"
         )
 
 
@@ -1718,7 +1575,7 @@ def main():
 
     print("=" * 60)
     print(
-        "MONITORAGGIO RICERCA FINALIZZATA"
+        "MONITORAGGIO RSS RICERCA FINALIZZATA"
     )
     print("=" * 60)
 
@@ -1730,52 +1587,18 @@ def main():
 
     try:
         (
-            candidati,
-            indici_accessibili,
-            errori_indice,
-        ) = raccogli_pagine_candidate(
+            entries,
+            titolo_feed,
+        ) = leggi_feed_rss(
             sessione
         )
-
-        print()
-        print(
-            "Pagine indice accessibili: "
-            f"{indici_accessibili}"
-        )
-
-        print(
-            "Pagine candidate trovate: "
-            f"{len(candidati)}"
-        )
-
-        (
-            risultati,
-            statistiche,
-            errori_pagine,
-        ) = analizza_candidati(
-            sessione,
-            candidati,
-        )
-
-        if statistiche[
-            "pagine_accessibili"
-        ] == 0:
-            raise RuntimeError(
-                "Nessuna pagina della Ricerca "
-                "Finalizzata è stata realmente "
-                "analizzabile. Il sito del Ministero "
-                "ha bloccato tutte le richieste. "
-                "L'archivio precedente non verrà "
-                "sovrascritto."
-            )
 
     except (
         requests.RequestException,
         RuntimeError,
     ) as errore:
-        print()
         print(
-            "Monitoraggio non completato: "
+            "Errore durante il controllo RSS: "
             f"{errore}"
         )
 
@@ -1784,41 +1607,71 @@ def main():
             "sovrascritto."
         )
 
-        percorso_riepilogo = os.environ.get(
-            "GITHUB_STEP_SUMMARY"
-        )
-
-        if percorso_riepilogo:
-            with open(
-                percorso_riepilogo,
-                "a",
-                encoding="utf-8",
-            ) as file:
-                file.write(
-                    "# Ricerca Finalizzata\n\n"
-                    "Stato del monitor: "
-                    "**non completato**\n\n"
-                    "Il sito del Ministero ha impedito "
-                    "l'analisi delle pagine. "
-                    "L'archivio precedente non è stato "
-                    "sovrascritto.\n\n"
-                    f"Dettaglio: {errore}\n"
-                )
-
         raise SystemExit(1)
 
-    nuove_calls = identifica_nuove_calls(
+    print(
+        f"Titolo del feed: {titolo_feed}"
+    )
+
+    candidati_rss = estrai_elementi_rss(
+        entries
+    )
+
+    print(
+        "Candidati Ricerca Finalizzata "
+        f"trovati nel feed: {len(candidati_rss)}"
+    )
+
+    candidati_verificati = []
+
+    for numero, candidato in enumerate(
+        candidati_rss,
+        start=1,
+    ):
+        print()
+        print(
+            f"Verifica candidato "
+            f"{numero}/{len(candidati_rss)}: "
+            f"{candidato['titolo']}"
+        )
+
+        verificato = verifica_candidato_html(
+            sessione,
+            candidato,
+        )
+
+        print(
+            "  Stato verifica: "
+            f"{verificato['stato_verifica']}"
+        )
+
+        print(
+            "  Stato submission: "
+            f"{verificato['stato_submission']}"
+        )
+
+        candidati_verificati.append(
+            verificato
+        )
+
+    risultati = (
+        seleziona_risultati_da_archiviare(
+            candidati_verificati
+        )
+    )
+
+    nuovi = identifica_nuovi_risultati(
         precedenti,
         risultati,
     )
 
-    calls_rimosse = identifica_calls_rimosse(
+    rimossi = identifica_risultati_rimossi(
         precedenti,
         risultati,
     )
 
-    calls_modificate = (
-        identifica_calls_modificate(
+    modificati = (
+        identifica_risultati_modificati(
             precedenti,
             risultati,
         )
@@ -1826,95 +1679,65 @@ def main():
 
     salva_risultati(
         risultati,
-        statistiche,
+        len(entries),
+        len(candidati_rss),
     )
 
     aggiungi_riepilogo_github(
         risultati,
-        nuove_calls,
-        calls_rimosse,
-        calls_modificate,
-        statistiche,
-        errori_indice,
-        errori_pagine,
+        candidati_rss,
+        nuovi,
+        rimossi,
+        modificati,
+        len(entries),
     )
 
     print()
     print(
-        "Bandi oncologici attivi: "
+        "Elementi nel feed: "
+        f"{len(entries)}"
+    )
+
+    print(
+        "Candidati RSS: "
+        f"{len(candidati_rss)}"
+    )
+
+    print(
+        "Risultati archiviati: "
         f"{len(risultati)}"
     )
 
     print(
-        "Pagine realmente analizzate: "
-        f"{statistiche['pagine_accessibili']}"
+        "Nuovi risultati: "
+        f"{len(nuovi)}"
     )
 
     print(
-        "Pagine non analizzabili: "
-        f"{statistiche['pagine_non_analizzabili']}"
+        "Risultati modificati: "
+        f"{len(modificati)}"
     )
 
     print(
-        "Bandi dichiarati conclusi: "
-        f"{statistiche['dichiarate_chiuse']}"
-    )
-
-    print(
-        "Bandi scaduti: "
-        f"{statistiche['scadute']}"
-    )
-
-    print(
-        "Bandi non pertinenti: "
-        f"{statistiche['non_pertinenti']}"
-    )
-
-    print(
-        "Deadline non rilevate: "
-        f"{statistiche['deadline_non_rilevate']}"
-    )
-
-    print(
-        "Nuovi bandi attivi: "
-        f"{len(nuove_calls)}"
-    )
-
-    print(
-        "Bandi modificati: "
-        f"{len(calls_modificate)}"
-    )
-
-    print(
-        "Bandi non più attivi: "
-        f"{len(calls_rimosse)}"
+        "Risultati rimossi: "
+        f"{len(rimossi)}"
     )
 
     print(
         f"File aggiornato: {OUTPUT_FILE}"
     )
 
-    stampa_elenco(
-        "BANDI ONCOLOGICI CON SUBMISSION APERTA",
-        risultati,
-    )
-
-    stampa_elenco(
-        "NUOVI BANDI ATTIVI",
-        nuove_calls,
-    )
-
-    stampa_elenco(
-        "BANDI NON PIÙ ATTIVI",
-        calls_rimosse,
+    stampa_risultati(
+        risultati
     )
 
     print()
     print(
-        "Monitoraggio Ricerca Finalizzata "
+        "Monitoraggio RSS Ricerca Finalizzata "
         "completato correttamente."
     )
 
 
 if __name__ == "__main__":
     main()
+``
