@@ -76,7 +76,6 @@ jobs:
             echo "Gli altri monitor continueranno normalmente."
           fi
 
-
       - name: Esegue il monitoraggio Worldwide Cancer Research
         id: worldwide_cancer_research
         continue-on-error: true
@@ -96,7 +95,6 @@ jobs:
             echo "Gli altri monitor continueranno normalmente."
           fi
 
-
       - name: Verifica i file JSON obbligatori
         shell: bash
         run: |
@@ -105,7 +103,6 @@ jobs:
           files_obbligatori=(
             "data/ep_permed_calls.json"
             "data/eu_mission_cancer_calls.json"
-            "data/worldwide_cancer_research_calls.json"
           )
 
           for file in "${files_obbligatori[@]}"; do
@@ -133,6 +130,23 @@ jobs:
             echo "Archivio Ricerca Finalizzata presente e valido."
           else
             echo "Archivio Ricerca Finalizzata non ancora disponibile."
+            echo "Questo non interrompe il workflow."
+          fi
+
+      - name: Verifica archivio Worldwide Cancer Research
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          file="data/worldwide_cancer_research_calls.json"
+
+          if [ -f "$file" ]; then
+            python -m json.tool "$file" > /dev/null
+            echo "Archivio Worldwide Cancer Research presente e valido."
+          else
+            echo "Archivio Worldwide Cancer Research non ancora disponibile."
+            echo "Il sito ha probabilmente bloccato il runner GitHub."
             echo "Questo non interrompe il workflow."
           fi
 
@@ -298,10 +312,13 @@ jobs:
 
           git add data/ep_permed_calls.json
           git add data/eu_mission_cancer_calls.json
-          git add data/worldwide_cancer_research_calls.json
 
           if [ -f "data/ricerca_finalizzata_calls.json" ]; then
             git add data/ricerca_finalizzata_calls.json
+          fi
+
+          if [ -f "data/worldwide_cancer_research_calls.json" ]; then
+            git add data/worldwide_cancer_research_calls.json
           fi
 
           if git diff --cached --quiet; then
