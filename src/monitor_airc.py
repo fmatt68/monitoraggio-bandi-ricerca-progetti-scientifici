@@ -36,14 +36,55 @@ PAGINE_PROGRAMMI_CONOSCIUTI = [
     f"{BASE_URL}/funding-for-research/individual-grants/start-up-grant/",
     f"{BASE_URL}/funding-for-research/individual-grants/bridge-grant/",
     f"{BASE_URL}/funding-for-research/individual-grants/next-gen-clinician-scientist-grant/",
-    f"{BASE_URL}/funding-for-research/individual-grants/southern-italy-scholars/",
+    f"{BASE_URL}/funding-for-research/individual-grants/southern-italy-scholars-sis/",
     f"{BASE_URL}/funding-for-research/fellowship/italy-pre-doc/",
     f"{BASE_URL}/funding-for-research/fellowship/italy-post-doc/",
-    f"{BASE_URL}/funding-for-research/fellowship/abroad/",
-    f"{BASE_URL}/funding-for-research/fellowship/gianni-bonadonna/",
-    f"{BASE_URL}/funding-for-research/fellowship/short-term-fellowship/",
+    f"{BASE_URL}/funding-for-research/fellowship/abroad-pre-doc/",
+    f"{BASE_URL}/funding-for-research/fellowship/abroad-post-doc/",
     PAGINA_MULTIUNIT,
 ]
+
+# Fallback limitati a pagine ufficiali AIRC 2026 per le quali data e stato
+# risultano pubblicati, ma non sono sempre inclusi nell'HTML reso al runner.
+FALLBACK_UFFICIALI_2026 = {
+    "/funding-for-research/individual-grants/investigator-grant/": {
+        "anno": "2026",
+        "deadline": "06 Mar 2026",
+        "stato_dichiarato": "scaduto",
+    },
+    "/funding-for-research/individual-grants/my-first-airc-grant/": {
+        "anno": "2026",
+        "deadline": "03 Mar 2026",
+        "stato_dichiarato": "scaduto",
+    },
+    "/funding-for-research/individual-grants/bridge-grant/": {
+        "anno": "2026",
+        "deadline": "06 Mar 2026",
+        "stato_dichiarato": "scaduto",
+    },
+    "/funding-for-research/individual-grants/next-gen-clinician-scientist-grant/": {
+        "anno": "2026",
+        "deadline": "06 Jul 2026",
+        "stato_dichiarato": "scaduto",
+    },
+    "/funding-for-research/fellowship/italy-pre-doc/": {
+        "anno": "2026",
+        "deadline": "11 May 2026",
+        "stato_dichiarato": "scaduto",
+    },
+    "/funding-for-research/fellowship/italy-post-doc/": {
+        "anno": "2026",
+        "deadline": "11 May 2026",
+        "stato_dichiarato": "scaduto",
+    },
+    "/funding-for-research/multiunit-reasearch/": {
+        "anno": "2026",
+        "deadline": "10 Mar 2026",
+        "full_proposal_deadline": "30 Jun 2026 at 17:00 CET",
+        "stato_dichiarato": "scaduto",
+    },
+}
+
 
 PERCORSI_AMMESSI = (
     "/funding-for-research/individual-grants/",
@@ -128,6 +169,9 @@ def normalizza_url(indirizzo, pagina_base=BASE_URL):
     percorso = elementi.path or "/"
     if not percorso.endswith("/") and "." not in percorso.rsplit("/", 1)[-1]:
         percorso += "/"
+    if percorso == "/funding-for-research/individual-grants/southern-italy-scholars/":
+        percorso = "/funding-for-research/individual-grants/southern-italy-scholars-sis/"
+
     return urlunparse(
         (elementi.scheme.lower(), elementi.netloc.lower(), percorso, "", "", "")
     )
@@ -141,20 +185,31 @@ def scarica_pagina(sessione, url):
 
 
 def estrai_testo_completo(html):
+    """Estrae testo visibile, metadati e contenuti incorporati utili."""
+
     soup = BeautifulSoup(html, "html.parser")
     frammenti = []
 
     if soup.title:
         frammenti.append(pulisci_testo(soup.title.get_text(" ", strip=True)))
 
-    for attributi in (
-        {"name": "description"},
-        {"property": "og:description"},
-        {"name": "twitter:description"},
-    ):
-        meta = soup.find("meta", attrs=attributi)
-        if meta and meta.get("content"):
-            frammenti.append(pulisci_testo(meta.get("content")))
+    for meta in soup.find_all("meta"):
+        contenuto = meta.get("content")
+        if contenuto:
+            frammenti.append(pulisci_testo(contenuto))
+
+    for script in soup.find_all("script"):
+        contenuto = script.string or script.get_text(" ", strip=True)
+        if contenuto:
+            frammenti.append(pulisci_testo(contenuto))
+
+    for elemento in soup.find_all(True):
+        for nome, valore in elemento.attrs.items():
+            if not nome.startswith("data-"):
+                continue
+            if isinstance(valore, list):
+                valore = " ".join(str(x) for x in valore)
+            frammenti.append(pulisci_testo(str(valore)))
 
     copia = BeautifulSoup(str(soup), "html.parser")
     for elemento in copia(
@@ -164,6 +219,7 @@ def estrai_testo_completo(html):
 
     area = copia.find("main") or copia.find("article") or copia.body or copia
     frammenti.append(pulisci_testo(area.get_text(" ", strip=True)))
+
     return pulisci_testo(" ".join(frammenti))
 
 
@@ -421,6 +477,47 @@ def valuta_submission(stato_dichiarato, deadline_iso):
     }
 
 
+def applica_fallback_ufficiale_2026(url, anno, stato_dichiarato, deadline_info, full_deadline_info):
+    """Applica fallback circoscritti alle sole pagine ufficiali AIRC mappate."""
+
+    percorso = urlparse(url).path
+    fallback = FALLBACK_UFFICIALI_2026.get(percorso)
+
+    if not fallback:
+        return anno, stato_dichiarato, deadline_info, full_deadline_info, None
+
+    origine = None
+
+    if not anno:
+        anno = fallback.get("anno")
+        origine = "fallback_ufficiale_2026"
+
+    if stato_dichiarato == "non_determinato" and fallback.get("stato_dichiarato"):
+        stato_dichiarato = fallback["stato_dichiarato"]
+        origine = "fallback_ufficiale_2026"
+
+    if deadline_info is None and fallback.get("deadline"):
+        data = interpreta_data(fallback["deadline"])
+        if data:
+            deadline_info = {
+                "deadline": data.isoformat(),
+                "deadline_testo": fallback["deadline"],
+                "deadline_tipo": "fallback pagina ufficiale",
+            }
+            origine = "fallback_ufficiale_2026"
+
+    if full_deadline_info is None and fallback.get("full_proposal_deadline"):
+        data = interpreta_data(fallback["full_proposal_deadline"])
+        if data:
+            full_deadline_info = {
+                "deadline": data.isoformat(),
+                "deadline_testo": fallback["full_proposal_deadline"],
+            }
+            origine = "fallback_ufficiale_2026"
+
+    return anno, stato_dichiarato, deadline_info, full_deadline_info, origine
+
+
 def analizza_programmi(sessione, candidati):
     tutti = []
     statistiche = {
@@ -453,6 +550,20 @@ def analizza_programmi(sessione, candidati):
         stato_dichiarato = determina_stato_dichiarato(testo)
         deadline_info = estrai_deadline(testo)
         full_deadline_info = estrai_full_proposal_deadline(testo)
+
+        (
+            anno,
+            stato_dichiarato,
+            deadline_info,
+            full_deadline_info,
+            fallback_origine,
+        ) = applica_fallback_ufficiale_2026(
+            candidato["url"],
+            anno,
+            stato_dichiarato,
+            deadline_info,
+            full_deadline_info,
+        )
 
         deadline_iso = deadline_info["deadline"] if deadline_info else None
         valutazione = valuta_submission(stato_dichiarato, deadline_iso)
@@ -492,6 +603,9 @@ def analizza_programmi(sessione, candidati):
             ),
             "full_proposal_deadline_testo": (
                 full_deadline_info["deadline_testo"] if full_deadline_info else None
+            ),
+            "dati_origine": (
+                fallback_origine or "pagina_ufficiale"
             ),
         }
 
