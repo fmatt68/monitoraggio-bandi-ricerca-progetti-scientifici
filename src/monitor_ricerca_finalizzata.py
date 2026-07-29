@@ -22,18 +22,6 @@ FEED_RSS = (
     "RSS_notizie.xml"
 )
 
-PAGINE_INDICE = [
-    (
-        "https://www.salute.gov.it/new/it/tema/"
-        "sistema-ricerca-del-ssn-enti-e-finanziamenti/"
-        "la-ricerca-finalizzata/"
-    ),
-    (
-        "https://www.salute.gov.it/new/it/tema/"
-        "sistema-ricerca-del-ssn-enti-e-finanziamenti/"
-    ),
-]
-
 OUTPUT_FILE = Path(
     "data/ricerca_finalizzata_calls.json"
 )
@@ -53,17 +41,6 @@ TERMINI_RICERCA_FINALIZZATA = {
     "bando ricerca sanitaria",
     "giovani ricercatori",
     "starting grant",
-}
-
-
-TERMINI_BANDO = {
-    "bando",
-    "avviso",
-    "call",
-    "presentazione dei progetti",
-    "presentazione delle domande",
-    "presentazione delle proposte",
-    "finanziamento di progetti",
 }
 
 
@@ -201,8 +178,7 @@ SCHEMI_DATA = [
 
 def crea_sessione():
     """
-    Crea una sessione HTTP per il feed RSS
-    e per le pagine del Ministero.
+    Crea una sessione HTTP riutilizzabile.
     """
 
     sessione = requests.Session()
@@ -257,7 +233,7 @@ def pulisci_testo(testo):
 def normalizza_testo(testo):
     """
     Converte il testo in minuscolo,
-    elimina gli accenti e uniforma i trattini.
+    elimina gli accenti e normalizza i trattini.
     """
 
     testo = unicodedata.normalize(
@@ -284,8 +260,8 @@ def normalizza_testo(testo):
 
 def normalizza_url(indirizzo, pagina_base):
     """
-    Converte un indirizzo relativo in URL assoluto
-    ed elimina parametri e frammenti.
+    Converte un URL relativo in URL assoluto
+    e rimuove parametri e frammenti.
     """
 
     if not indirizzo:
@@ -314,8 +290,7 @@ def normalizza_url(indirizzo, pagina_base):
 
 def trova_termini(testo, termini):
     """
-    Restituisce i termini trovati nel testo,
-    rispettando i confini delle parole.
+    Restituisce i termini trovati nel testo.
     """
 
     testo_normalizzato = normalizza_testo(
@@ -366,8 +341,7 @@ def trova_indicatori_blocco(contenuto):
 
 def scarica_contenuto(sessione, url):
     """
-    Scarica un contenuto e restituisce
-    il testo della risposta.
+    Scarica un contenuto remoto.
     """
 
     risposta = sessione.get(
@@ -413,11 +387,6 @@ def scarica_pagina_html(sessione, url):
 def leggi_feed_rss(sessione):
     """
     Scarica e interpreta il feed RSS ufficiale.
-
-    Restituisce:
-    - elementi del feed;
-    - titolo del feed;
-    - URL del feed.
     """
 
     print(
@@ -435,7 +404,7 @@ def leggi_feed_rss(sessione):
 
     if indicatori:
         raise RuntimeError(
-            "Anche il feed RSS è stato bloccato: "
+            "Il feed RSS è stato bloccato: "
             + ", ".join(indicatori)
         )
 
@@ -522,11 +491,8 @@ def estrai_data_pubblicazione(entry):
 
 def estrai_elementi_rss(entries):
     """
-    Cerca nel feed notizie relative
+    Cerca nel feed le notizie relative
     alla Ricerca Finalizzata.
-
-    Il filtro riguarda la tipologia di bando,
-    non ancora la pertinenza oncologica.
     """
 
     candidati = []
@@ -961,287 +927,295 @@ def verifica_candidato_html(
     ) as errore:
         return {
             **candidato,
-            "stato_ver**ica": (
-                "verifica**loccata"
+            "stato_verifica": (
+                "verifica_bloccata"
             ),
-         ** "motivo_verifica": str(errore),
-**          "rilevanza": (
-        **      "bando_generale_da_verifica**"
+            "motivo_verifica": str(errore),
+            "rilevanza": (
+                "bando_generale_da_verificare"
             ),
-            "par**e_chiave_oncologiche": [],
-      **    "submission_aperta": None,
-  **        "stato_submission": (
-   **           "non_verificato"
-     **     ),
-            "deadline": N**e,
-            "deadline_testo": **ne,
+            "parole_chiave_oncologiche": [],
+            "submission_aperta": None,
+            "stato_submission": (
+                "non_verificato"
+            ),
+            "deadline": None,
+            "deadline_testo": None,
         }
 
-    testo = estrai**esto_principale(
+    testo = estrai_testo_principale(
         html
-   **
+    )
 
     testo_completo = (
-        **{candidato['titolo']} "
-        f**candidato['descrizione_rss']} "
- **     f"{testo}"
+        f"{candidato['titolo']} "
+        f"{candidato['descrizione_rss']} "
+        f"{testo}"
     )
 
-    indica**ri_chiusura = trova_termini(
-    **  testo_completo,
-        TERMINI**HIUSURA,
+    indicatori_chiusura = trova_termini(
+        testo_completo,
+        TERMINI_CHIUSURA,
     )
 
-    parole_oncolo**che = trova_termini(
-        test**completo,
-        TERMINI_ONCOLOG**I,
+    parole_oncologiche = trova_termini(
+        testo_completo,
+        TERMINI_ONCOLOGICI,
     )
 
-    informazioni_deadli** = estrai_deadline(
-        testo**ompleto
+    informazioni_deadline = estrai_deadline(
+        testo_completo
     )
 
-    if indicatori_**iusura:
+    if indicatori_chiusura:
         return {
-        **  **candidato,
-            "stato**erifica": "confermato",
-         ** "rilevanza": (
-                "**cologica"
-                if paro**_oncologiche
-                else**bando_generale"
+            **candidato,
+            "stato_verifica": "confermato",
+            "rilevanza": (
+                "oncologica"
+                if parole_oncologiche
+                else "bando_generale"
             ),
-  **        "parole_chiave_oncologich**: (
-                parole_oncolo**che
+            "parole_chiave_oncologiche": (
+                parole_oncologiche
             ),
-            "s**mission_aperta": False,
-         ** "stato_submission": (
-          **    "dichiarata_conclusa"
-       **   ),
-            "indicatori_chi**ura": (
-                indicator**chiusura
+            "submission_aperta": False,
+            "stato_submission": (
+                "dichiarata_conclusa"
             ),
-         ** "deadline": None,
-            "d**dline_testo": None,
+            "indicatori_chiusura": (
+                indicatori_chiusura
+            ),
+            "deadline": None,
+            "deadline_testo": None,
         }
 
-  **if informazioni_deadline:
-       **alutazione = valuta_deadline(
-   **       informazioni_deadline[
+    if informazioni_deadline:
+        valutazione = valuta_deadline(
+            informazioni_deadline[
                 "deadline"
             ]
         )
 
         return {
-    **      **candidato,
-            "s**to_verifica": "confermato",
-     **     "rilevanza": (
-             ** "oncologica"
-                if **role_oncologiche
-                **se "bando_generale"
-            )**            "parole_chiave_oncolo**che": (
-                parole_on**logiche
+            **candidato,
+            "stato_verifica": "confermato",
+            "rilevanza": (
+                "oncologica"
+                if parole_oncologiche
+                else "bando_generale"
             ),
-          **"submission_aperta": (
-          **    valutazione[
+            "parole_chiave_oncologiche": (
+                parole_oncologiche
+            ),
+            "submission_aperta": (
+                valutazione[
                     "submission_aperta"
                 ]
             ),
-            "**ato_submission": (
-              **valutazione[
+            "stato_submission": (
+                valutazione[
                     "stato_submission"
                 ]
             ),
-            "deadl**e": (
-                informazion**deadline[
+            "deadline": (
+                informazioni_deadline[
                     "deadline"
                 ]
-         ** ),
-            "deadline_testo":**
-                informazioni_dea**ine[
+            ),
+            "deadline_testo": (
+                informazioni_deadline[
                     "deadline_testo"
                 ]
-        **  ),
+            ),
+            "deadline_affidabilita": (
+                informazioni_deadline[
+                    "deadline_affidabilita"
+                ]
+            ),
         }
 
     return {
-    **  **candidato,
-        "stato_ver**ica": (
-            "pagina_acces**bile_deadline_non_rilevata"
-     ** ),
+        **candidato,
+        "stato_verifica": (
+            "pagina_accessibile_deadline_non_rilevata"
+        ),
         "rilevanza": (
-      **    "oncologica"
-            if p**ole_oncologiche
-            else **ando_generale_da_verificare"
-    **  ),
-        "parole_chiave_oncol**iche": (
-            parole_oncol**iche
+            "oncologica"
+            if parole_oncologiche
+            else "bando_generale_da_verificare"
         ),
-        "submissi**_aperta": None,
-        "stato_su**ission": (
-            "deadline_**n_verificata"
+        "parole_chiave_oncologiche": (
+            parole_oncologiche
         ),
-        **eadline": None,
-        "deadline**esto": None,
+        "submission_aperta": None,
+        "stato_submission": (
+            "deadline_non_verificata"
+        ),
+        "deadline": None,
+        "deadline_testo": None,
     }
 
 
-def selezion**risultati_da_archiviare(
-    cand**ati_verificati,
+def seleziona_risultati_da_archiviare(
+    candidati_verificati,
 ):
     """
-    Co**erva:
+    Conserva:
 
-    - bandi confermati con**ubmission aperta;
-    - candidati**SS la cui verifica è bloccata;
-  **- candidati con pagina accessibil**ma
-      deadline non rilevata.
+    - bandi confermati con submission aperta;
+    - candidati con verifica bloccata;
+    - candidati con deadline non verificata.
 
-**  Esclude i bandi confermati come**caduti
-    o conclusi.
+    Esclude bandi confermati come scaduti
+    o dichiarati conclusi.
     """
 
- ** risultati = []
+    risultati = []
 
-    for candidat**in candidati_verificati:
-        **ato_submission = candidato.get(
- **         "stato_submission"
-     ** )
+    for candidato in candidati_verificati:
+        stato_submission = candidato.get(
+            "stato_submission"
+        )
 
-        if stato_submission i**{
+        if stato_submission in {
             "scaduta",
-        **  "dichiarata_conclusa",
-        **
+            "dichiarata_conclusa",
+        }:
             continue
 
-        ri**ltati.append(
-            candida**
+        risultati.append(
+            candidato
         )
 
     risultati.sort(
- **     key=lambda elemento: (
-     **     0
-            if elemento.ge**
-                "submission_aper**"
+        key=lambda elemento: (
+            elemento.get(
+                "data_pubblicazione"
             )
-            is Tr**
-            else 1,
-            **emento.get(
-                "data**ubblicazione"
-            )
-     **     or "",
-            elemento["titolo"].lower(),
+            or "",
+            elemento.get(
+                "titolo",
+                "",
+            ).lower(),
         ),
-     ** reverse=False,
+        reverse=True,
     )
 
-    return**isultati
+    return risultati
 
 
-def carica_risultati_p**cedenti():
+def carica_risultati_precedenti():
     """
-    Legge l'ar**ivio precedente.
+    Legge l'archivio precedente.
     """
 
-    if **t OUTPUT_FILE.exists():
-        p**nt(
-            "Nessun archivio **ecedente "
-            "Ricerca F**alizzata trovato."
+    if not OUTPUT_FILE.exists():
+        print(
+            "Nessun archivio precedente "
+            "Ricerca Finalizzata trovato."
         )
 
-   **   return []
+        return []
 
     try:
-        wi** OUTPUT_FILE.open(
-            "r**
+        with OUTPUT_FILE.open(
+            "r",
             encoding="utf-8",
-  **    ) as file:
-            dati =**son.load(
+        ) as file:
+            dati = json.load(
                 file
-  **        )
+            )
 
-        risultati = da**.get(
+        risultati = dati.get(
             "calls",
-      **    [],
+            [],
         )
 
-        if not**sinstance(
-            risultati,**           list,
+        if not isinstance(
+            risultati,
+            list,
         ):
-     **     return []
+            return []
 
         print(
-  **        "Risultati nell'archivio **ecedente: "
-            f"{len(ri**ltati)}"
+            "Risultati nell'archivio precedente: "
+            f"{len(risultati)}"
         )
 
-        retur**risultati
+        return risultati
 
     except (
-        O**rror,
-        json.JSONDecodeErro**
+        OSError,
+        json.JSONDecodeError,
     ) as errore:
         print(
-**          "Impossibile leggere "
-**          "l'archivio precedente:**
+            "Impossibile leggere "
+            "l'archivio precedente: "
             f"{errore}"
-        **
+        )
+
         return []
 
 
-def identifi**_nuovi_risultati(
-    precedenti,**   correnti,
-):
-    """
-    Ident**ica i nuovi risultati in base all**RL.
-    """
-
-    url_precedenti =**
-        elemento.get("url")
-    **  for elemento in precedenti
-    **  if elemento.get("url")
-    }
-
- ** return [
-        elemento
-        for elemento in correnti
-        if elemento.get("url")
-        not ** url_precedenti
-    ]
-
-
-def ident**ica_risultati_rimossi(
-    preced**ti,
+def identifica_nuovi_risultati(
+    precedenti,
     correnti,
 ):
     """
-    **entifica i risultati non più pres**ti.
+    Identifica i nuovi risultati in base all'URL.
     """
 
-    url_correnti = {**       elemento.get("url")
-      **for elemento in correnti
-        ** elemento.get("url")
-    }
-
-    r**urn [
-        elemento
+    url_precedenti = {
+        elemento.get("url")
         for elemento in precedenti
         if elemento.get("url")
-        and el**ento.get("url")
-        not in ur**correnti
+    }
+
+    return [
+        elemento
+        for elemento in correnti
+        if elemento.get("url")
+        not in url_precedenti
     ]
 
 
-def identifica_r**ultati_modificati(
-    precedenti**    correnti,
+def identifica_risultati_rimossi(
+    precedenti,
+    correnti,
 ):
     """
-    Iden**fica modifiche ai campi stabili.
-**  """
+    Identifica i risultati non più presenti.
+    """
 
-    precedenti_per_url = {**       elemento.get("url"): eleme**o
-        for elemento in precede**i
+    url_correnti = {
+        elemento.get("url")
+        for elemento in correnti
         if elemento.get("url")
-**  }
+    }
+
+    return [
+        elemento
+        for elemento in precedenti
+        if elemento.get("url")
+        and elemento.get("url")
+        not in url_correnti
+    ]
+
+
+def identifica_risultati_modificati(
+    precedenti,
+    correnti,
+):
+    """
+    Identifica modifiche ai campi stabili.
+    """
+
+    precedenti_per_url = {
+        elemento.get("url"): elemento
+        for elemento in precedenti
+        if elemento.get("url")
+    }
 
     campi = [
         "titolo",
@@ -1252,179 +1226,188 @@ def identifica_r**ultati_modificati(
         "deadline",
     ]
 
-    m**ificati = []
+    modificati = []
 
-    for corrente in**orrenti:
-        precedente = pre**denti_per_url.get(
-            co**ente.get("url")
+    for corrente in correnti:
+        precedente = precedenti_per_url.get(
+            corrente.get("url")
         )
 
-      **if not precedente:
-            co**inue
+        if not precedente:
+            continue
 
-        campi_modificati = **            campo
+        campi_modificati = [
+            campo
             for campo in campi
             if precedente.get(campo)
-            != co**ente.get(campo)
+            != corrente.get(campo)
         ]
 
-      **if campi_modificati:
-            **dificati.append(
-                **                    "titolo": cor**nte[
-                        "titolo"
-                    ],
-       **           "url": corrente[
-                        "url"
-                    ],
-                    "c**pi_modificati": (
-               **       campi_modificati
-         **         ),
+        if campi_modificati:
+            modificati.append(
+                {
+                    "titolo": corrente.get(
+                        "titolo",
+                        "Titolo non disponibile",
+                    ),
+                    "url": corrente.get(
+                        "url",
+                        "",
+                    ),
+                    "campi_modificati": (
+                        campi_modificati
+                    ),
                 }
-   **       )
+            )
 
     return modificati
 
-**ef salva_risultati(
-    risultati**    numero_elementi_feed,
-    num**o_candidati_rss,
+
+def salva_risultati(
+    risultati,
+    numero_elementi_feed,
+    numero_candidati_rss,
 ):
     """
-    S**va il risultato del controllo RSS**
-    Zero risultati significa che**el feed corrente
-    non sono sta** trovate segnalazioni pertinenti,**   non che sia stata verificata l**ntera sezione HTML.
+    Salva il risultato del controllo RSS.
+
+    Zero risultati indica che il feed corrente
+    non contiene segnalazioni pertinenti.
     """
 
-    **TPUT_FILE.parent.mkdir(
-        p**ents=True,
-        exist_ok=True,**   )
-
-    confermati_aperti = sum**        elemento.get(
-           **submission_aperta"
-        )
-    **  is True
-        for elemento in**isultati
+    OUTPUT_FILE.parent.mkdir(
+        parents=True,
+        exist_ok=True,
     )
 
-    verifiche_blo**ate = sum(
-        elemento.get(
-**          "stato_verifica"
-      **)
+    confermati_aperti = sum(
+        elemento.get("submission_aperta")
+        is True
+        for elemento in risultati
+    )
+
+    verifiche_bloccate = sum(
+        elemento.get("stato_verifica")
         == "verifica_bloccata"
-**      for elemento in risultati
- ** )
+        for elemento in risultati
+    )
 
     dati = {
-        "fonte":**ONTE,
-        "feed_rss": FEED_RS**
+        "fonte": FONTE,
+        "feed_rss": FEED_RSS,
         "criterio": (
-          **"allerta Ricerca Finalizzata, "
- **         "pertinenza oncologica e**eadline"
+            "allerta Ricerca Finalizzata, "
+            "pertinenza oncologica e deadline"
         ),
-        "moni**raggio_rss_completato": True,
-   **   "nota": (
-            "L'assen** di risultati indica che "
-      **    "nel feed RSS corrente non so** state "
-            "trovate seg**lazioni pertinenti. "
-           **Non certifica l'assenza assoluta **            "di bandi sul portale**
+        "monitoraggio_rss_completato": True,
+        "nota": (
+            "L'assenza di risultati indica che "
+            "nel feed RSS corrente non sono state "
+            "trovate segnalazioni pertinenti. "
+            "Non certifica l'assenza assoluta "
+            "di bandi sul portale."
         ),
-        "totale_eleme**i_feed": (
-            numero_ele**nti_feed
+        "totale_elementi_feed": (
+            numero_elementi_feed
         ),
-        "tota**_candidati_rss": (
-            nu**ro_candidati_rss
+        "totale_candidati_rss": (
+            numero_candidati_rss
         ),
-     ** "totale_confermati_aperti": (
-  **        confermati_aperti
-       **,
-        "totale_verifiche_blocc**e": (
-            verifiche_blocc**e
+        "totale_confermati_aperti": (
+            confermati_aperti
         ),
-        "numero_risu**ati": len(
+        "totale_verifiche_bloccate": (
+            verifiche_bloccate
+        ),
+        "numero_risultati": len(
             risultati
-**      ),
-        "calls": risulta**,
+        ),
+        "calls": risultati,
     }
 
-    with OUTPUT_FILE.ope**
+    with OUTPUT_FILE.open(
         "w",
-        encoding="u**-8",
+        encoding="utf-8",
     ) as file:
-        json.**mp(
+        json.dump(
             dati,
-           **ile,
-            ensure_ascii=Fal**,
+            file,
+            ensure_ascii=False,
             indent=2,
-        )**        file.write("\n")
+        )
+
+        file.write("\n")
 
 
-def fo**atta_deadline(deadline_iso):
-    **"
-    Converte la deadline in for**to leggibile.
+def formatta_deadline(deadline_iso):
+    """
+    Converte una deadline ISO in formato leggibile.
     """
 
-    if not**eadline_iso:
-        return "non **rificata"
+    if not deadline_iso:
+        return "non verificata"
 
     try:
-        deadl**e = datetime.fromisoformat(
-     **     deadline_iso
+        deadline = datetime.fromisoformat(
+            deadline_iso
         )
 
-    **cept ValueError:
-        return d**dline_iso
+    except ValueError:
+        return deadline_iso
 
-    if deadline.tzinfo**s None:
-        deadline = deadli**.replace(
-            tzinfo=FUSO**RARIO_ITALIA
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(
+            tzinfo=FUSO_ORARIO_ITALIA
         )
 
-    retur**deadline.astimezone(
-        FUSO**RARIO_ITALIA
+    return deadline.astimezone(
+        FUSO_ORARIO_ITALIA
     ).strftime(
-    **  "%d/%m/%Y alle %H:%M %Z**    )
-
-
-def aggiungi_riepilogo_gi**ub(
-    risultati,
-    candidati_**s,
-    nuovi,
-    rimossi,
-    mo**ficati,
-    numero_elementi_feed,**:
-    """
-    Aggiunge il riepilo** al Job summary.
-    """
-
-    per**rso = os.environ.get(
-        "GI**UB_STEP_SUMMARY"
+        "%d/%m/%Y alle %H:%M %Z"
     )
 
-    if no**percorso:
+
+def aggiungi_riepilogo_github(
+    risultati,
+    candidati_rss,
+    nuovi,
+    rimossi,
+    modificati,
+    numero_elementi_feed,
+):
+    """
+    Aggiunge il riepilogo alla pagina Summary
+    dell'esecuzione GitHub Actions.
+    """
+
+    percorso = os.environ.get(
+        "GITHUB_STEP_SUMMARY"
+    )
+
+    if not percorso:
         return
 
-    con**rmati_aperti = [
+    confermati_aperti = [
         elemento
         for elemento in risultati
-        if elemento.get(
-            "submission_aperta"
-        )
-   **   is True
+        if elemento.get("submission_aperta")
+        is True
     ]
 
-    verifiche_b**ccate = [
+    verifiche_bloccate = [
         elemento
         for elemento in risultati
-        if elemento.get(
-            "stato_verifica"
-        )
-        == "v**ifica_bloccata"
+        if elemento.get("stato_verifica")
+        == "verifica_bloccata"
     ]
 
-    righe **[
+    righe = [
         "# Ricerca Finalizzata",
         "",
-        "Canale controllato: "
-        "**feed RSS ufficiale del Ministero**",
+        (
+            "Canale controllato: "
+            "**feed RSS ufficiale del Ministero**"
+        ),
         "",
         (
             "Elementi presenti nel feed: "
@@ -1436,13 +1419,14 @@ def aggiungi_riepilogo_gi**ub(
             f"**{len(candidati_rss)}**"
         ),
         "",
-        **            "Bandi confermati con submission aperta: "
+        (
+            "Bandi confermati con submission aperta: "
             f"**{len(confermati_aperti)}**"
         ),
         "",
-       **
-            "Candidati con verif**a bloccata: "
-           **"**{len(verifiche_bloccate)}**"
+        (
+            "Candidati con verifica bloccata: "
+            f"**{len(verifiche_bloccate)}**"
         ),
         "",
         (
@@ -1471,29 +1455,62 @@ def aggiungi_riepilogo_gi**ub(
         )
 
         for risultato in risultati:
-            righe.append(
-                f"- [{risultato['titolo']}]"
-                f"({risultato['url']})"
+            titolo = risultato.get(
+                "titolo",
+                "Titolo non disponibile",
             )
+
+            url = risultato.get(
+                "url",
+                "",
+            )
+
+            stato_verifica = risultato.get(
+                "stato_verifica",
+                "non disponibile",
+            )
+
+            rilevanza = risultato.get(
+                "rilevanza",
+                "non disponibile",
+            )
+
+            stato_submission = risultato.get(
+                "stato_submission",
+                "non verificato",
+            )
+
+            deadline = formatta_deadline(
+                risultato.get("deadline")
+            )
+
+            if url:
+                righe.append(
+                    f"- {url}"
+                )
+            else:
+                righe.append(
+                    f"- {titolo}"
+                )
 
             righe.append(
                 "  - Stato verifica: "
-                f"**{risultato['stato_verifica']}**"
+                f"**{stato_verifica}**"
             )
 
             righe.append(
                 "  - Rilevanza: "
-                f"**{risultato['rilevanza']}**"
+                f"**{rilevanza}**"
             )
 
             righe.append(
                 "  - Stato submission: "
-                f"**{risultato['stato_submission']}**"
+                f"**{stato_submission}**"
             )
 
             righe.append(
                 "  - Deadline: "
-                f"**{formatta_deadline(risultato.get('deadline'))}**"
+                f"**{deadline}**"
             )
 
         righe.append("")
@@ -1501,9 +1518,125 @@ def aggiungi_riepilogo_gi**ub(
     else:
         righe.extend(
             [
-                "Nessuna nuova segnalazione relativa "
-                "alla Ricerca Finalizzata è presente "
-                "nel feed RSS corrente.",
+                (
+                    "Nessuna nuova segnalazione relativa "
+                    "alla Ricerca Finalizzata è presente "
+                    "nel feed RSS corrente."
+                ),
+                "",
+            ]
+        )
+
+    if nuovi:
+        righe.extend(
+            [
+                "## Nuovi risultati",
+                "",
+            ]
+        )
+
+        for risultato in nuovi:
+            titolo = risultato.get(
+                "titolo",
+                "Titolo non disponibile",
+            )
+
+            url = risultato.get(
+                "url",
+                "",
+            )
+
+            if url:
+                righe.append(
+                    f"- {url}"
+                )
+            else:
+                righe.append(
+                    f"- {titolo}"
+                )
+
+        righe.append("")
+
+    if modificati:
+        righe.extend(
+            [
+                "## Risultati modificati",
+                "",
+            ]
+        )
+
+        for risultato in modificati:
+            titolo = risultato.get(
+                "titolo",
+                "Titolo non disponibile",
+            )
+
+            url = risultato.get(
+                "url",
+                "",
+            )
+
+            campi_modificati = ", ".join(
+                risultato.get(
+                    "campi_modificati",
+                    [],
+                )
+            )
+
+            if url:
+                righe.append(
+                    f"- {url}: "
+                    f"{campi_modificati}"
+                )
+            else:
+                righe.append(
+                    f"- {titolo}: "
+                    f"{campi_modificati}"
+                )
+
+        righe.append("")
+
+    if rimossi:
+        righe.extend(
+            [
+                "## Risultati non più presenti",
+                "",
+            ]
+        )
+
+        for risultato in rimossi:
+            titolo = risultato.get(
+                "titolo",
+                "Titolo non disponibile",
+            )
+
+            url = risultato.get(
+                "url",
+                "",
+            )
+
+            if url:
+                righe.append(
+                    f"- {url}"
+                )
+            else:
+                righe.append(
+                    f"- {titolo}"
+                )
+
+        righe.append("")
+
+    if (
+        not nuovi
+        and not modificati
+        and not rimossi
+    ):
+        righe.extend(
+            [
+                (
+                    "Nessuna variazione rispetto "
+                    "all'esecuzione precedente."
+                ),
                 "",
             ]
         )
@@ -1517,6 +1650,8 @@ def aggiungi_riepilogo_gi**ub(
             "\n".join(righe)
         )
 
+        file.write("\n")
+
 
 def stampa_risultati(risultati):
     """
@@ -1524,8 +1659,13 @@ def stampa_risultati(risultati):
     """
 
     print()
-    print("RISULTATI RSS RICERCA FINALIZZATA")
-    print("--------------------------------")
+    print(
+        "RISULTATI RSS RICERCA FINALIZZATA"
+    )
+
+    print(
+        "--------------------------------"
+    )
 
     if not risultati:
         print(
@@ -1574,9 +1714,11 @@ def main():
     """
 
     print("=" * 60)
+
     print(
         "MONITORAGGIO RSS RICERCA FINALIZZATA"
     )
+
     print("=" * 60)
 
     precedenti = (
@@ -1629,6 +1771,7 @@ def main():
         start=1,
     ):
         print()
+
         print(
             f"Verifica candidato "
             f"{numero}/{len(candidati_rss)}: "
@@ -1693,6 +1836,7 @@ def main():
     )
 
     print()
+
     print(
         "Elementi nel feed: "
         f"{len(entries)}"
@@ -1732,6 +1876,7 @@ def main():
     )
 
     print()
+
     print(
         "Monitoraggio RSS Ricerca Finalizzata "
         "completato correttamente."
@@ -1740,4 +1885,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-``
