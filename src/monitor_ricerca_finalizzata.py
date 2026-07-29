@@ -4,7 +4,7 @@ import re
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 import dateparser
@@ -13,11 +13,9 @@ import requests
 from bs4 import BeautifulSoup
 
 
-FONTE = (
-    "Ministero della Salute - Ricerca Finalizzata"
-)
+FONTE = "Ministero della Salute - Ricerca Finalizzata"
 
-FEED_RSS = (
+FEED_UFFICIALE = (
     "https://www.salute.gov.it/new/rss/"
     "RSS_notizie.xml"
 )
@@ -29,6 +27,14 @@ OUTPUT_FILE = Path(
 FUSO_ORARIO_ITALIA = ZoneInfo(
     "Europe/Rome"
 )
+
+
+QUERY_BING = [
+    'site:salute.gov.it "ricerca finalizzata"',
+    'site:salute.gov.it "bando ricerca sanitaria"',
+    'site:salute.gov.it "giovani ricercatori" bando',
+    'site:salute.gov.it "starting grant" ricerca',
+]
 
 
 TERMINI_RICERCA_FINALIZZATA = {
@@ -177,10 +183,6 @@ SCHEMI_DATA = [
 
 
 def crea_sessione():
-    """
-    Crea una sessione HTTP riutilizzabile.
-    """
-
     sessione = requests.Session()
 
     sessione.headers.update(
@@ -210,14 +212,10 @@ def crea_sessione():
 
 
 def pulisci_testo(testo):
-    """
-    Rimuove tag HTML e spazi ripetuti.
-    """
-
     if not testo:
         return ""
 
-    testo_senza_html = BeautifulSoup(
+    testo_pulito = BeautifulSoup(
         testo,
         "html.parser",
     ).get_text(
@@ -226,16 +224,11 @@ def pulisci_testo(testo):
     )
 
     return " ".join(
-        testo_senza_html.split()
+        testo_pulito.split()
     )
 
 
 def normalizza_testo(testo):
-    """
-    Converte il testo in minuscolo,
-    elimina gli accenti e normalizza i trattini.
-    """
-
     testo = unicodedata.normalize(
         "NFKD",
         testo or "",
@@ -258,41 +251,7 @@ def normalizza_testo(testo):
     )
 
 
-def normalizza_url(indirizzo, pagina_base):
-    """
-    Converte un URL relativo in URL assoluto
-    e rimuove parametri e frammenti.
-    """
-
-    if not indirizzo:
-        return ""
-
-    url_assoluto = urljoin(
-        pagina_base,
-        indirizzo.strip(),
-    )
-
-    elementi = urlparse(
-        url_assoluto
-    )
-
-    return urlunparse(
-        (
-            elementi.scheme.lower(),
-            elementi.netloc.lower(),
-            elementi.path,
-            "",
-            "",
-            "",
-        )
-    )
-
-
 def trova_termini(testo, termini):
-    """
-    Restituisce i termini trovati nel testo.
-    """
-
     testo_normalizzato = normalizza_testo(
         testo
     )
@@ -324,10 +283,6 @@ def trova_termini(testo, termini):
 
 
 def trova_indicatori_blocco(contenuto):
-    """
-    Riconosce le pagine di verifica Gcore.
-    """
-
     testo = normalizza_testo(
         pulisci_testo(contenuto)
     )
@@ -340,10 +295,6 @@ def trova_indicatori_blocco(contenuto):
 
 
 def scarica_contenuto(sessione, url):
-    """
-    Scarica un contenuto remoto.
-    """
-
     risposta = sessione.get(
         url,
         timeout=40,
@@ -355,123 +306,252 @@ def scarica_contenuto(sessione, url):
     return risposta.text
 
 
-def scarica_pagina_html(sessione, url):
-    """
-    Scarica una pagina HTML e riconosce
-    eventuali blocchi Gcore.
-    """
-
-    contenuto = scarica_contenuto(
-        sessione,
-        url,
-    )
-
-    indicatori = trova_indicatori_blocco(
-        contenuto
-    )
-
-    if indicatori:
-        raise RuntimeError(
-            "Pagina bloccata dalla protezione "
-            "del sito: "
-            + ", ".join(indicatori)
-        )
-
-    print(
-        f"Pagina HTML accessibile: {url}"
-    )
-
-    return contenuto
-
-
-def leggi_feed_rss(sessione):
-    """
-    Scarica e interpreta il feed RSS ufficiale.
-    """
-
-    print(
-        f"Controllo feed RSS: {FEED_RSS}"
-    )
-
-    contenuto = scarica_contenuto(
-        sessione,
-        FEED_RSS,
-    )
-
-    indicatori = trova_indicatori_blocco(
-        contenuto
-    )
-
-    if indicatori:
-        raise RuntimeError(
-            "Il feed RSS è stato bloccato: "
-            + ", ".join(indicatori)
-        )
-
+def feed_da_contenuto(
+    contenuto,
+    descrizione,
+):
     feed = feedparser.parse(
         contenuto
     )
 
     if feed.bozo and not feed.entries:
         raise RuntimeError(
-            "Il feed RSS non è interpretabile: "
+            f"Feed {descrizione} non interpretabile: "
             f"{feed.bozo_exception}"
         )
 
+    return feed
+
+
+def leggi_feed_ufficiale(sessione):
     print(
-        "Feed RSS letto correttamente."
+        "Controllo feed RSS ufficiale: "
+        f"{FEED_UFFICIALE}"
+    )
+
+    contenuto = scarica_contenuto(
+        sessione,
+        FEED_UFFICIALE,
+    )
+
+    indicatori = trova_indicatori_blocco(
+        contenuto
+    )
+
+    if indicatori:
+        raise RuntimeError(
+            "Feed ufficiale bloccato: "
+            + ", ".join(indicatori)
+        )
+
+    feed = feed_da_contenuto(
+        contenuto,
+        "ufficiale",
     )
 
     print(
-        "Elementi presenti nel feed: "
-        f"{len(feed.entries)}"
-    )
-
-    titolo_feed = feed.feed.get(
-        "title",
-        "Notizie dal Ministero",
+        "Feed ufficiale letto: "
+        f"{len(feed.entries)} elementi"
     )
 
     return (
         feed.entries,
-        titolo_feed,
+        [FEED_UFFICIALE],
     )
 
 
-def estrai_data_pubblicazione(entry):
-    """
-    Ricava la data di pubblicazione
-    di un elemento RSS in formato ISO.
-    """
+def costruisci_url_bing(query):
+    query_codificata = quote_plus(
+        query
+    )
 
-    struttura_data = (
+    return (
+        "https://www.bing.com/news/search?"
+        f"q={query_codificata}"
+        "&format=rss"
+        "&setlang=it"
+        "&cc=it"
+    )
+
+
+def leggi_feed_bing(sessione):
+    entries = []
+    fonti = []
+    errori = []
+
+    for query in QUERY_BING:
+        url = costruisci_url_bing(
+            query
+        )
+
+        print(
+            "Controllo fallback Bing News RSS: "
+            f"{query}"
+        )
+
+        try:
+            contenuto = scarica_contenuto(
+                sessione,
+                url,
+            )
+
+            feed = feed_da_contenuto(
+                contenuto,
+                query,
+            )
+
+            entries.extend(
+                feed.entries
+            )
+
+            fonti.append(
+                url
+            )
+
+            print(
+                "  Elementi ricevuti: "
+                f"{len(feed.entries)}"
+            )
+
+        except (
+            requests.RequestException,
+            RuntimeError,
+        ) as errore:
+            errori.append(
+                f"{query}: {errore}"
+            )
+
+            print(
+                "  Fallback non disponibile: "
+                f"{errore}"
+            )
+
+    if not fonti:
+        raise RuntimeError(
+            "Nessun feed Bing disponibile. "
+            + " | ".join(errori)
+        )
+
+    return (
+        entries,
+        fonti,
+    )
+
+
+def estrai_url_ufficiale(entry):
+    candidati = [
+        entry.get("link", ""),
+        entry.get("id", ""),
+        entry.get("guid", ""),
+    ]
+
+    testo = " ".join(
+        [
+            entry.get("summary", ""),
+            entry.get("description", ""),
+            entry.get("title", ""),
+        ]
+    )
+
+    candidati.extend(
+        re.findall(
+            r"https?://[^\s<>'\"]+",
+            testo,
+        )
+    )
+
+    for indirizzo in candidati:
+        if not indirizzo:
+            continue
+
+        indirizzo = indirizzo.replace(
+            "&amp;",
+            "&",
+        )
+
+        elementi = urlparse(
+            indirizzo
+        )
+
+        parametri = parse_qs(
+            elementi.query
+        )
+
+        for chiave in (
+            "url",
+            "u",
+            "r",
+        ):
+            if (
+                chiave in parametri
+                and parametri[chiave]
+            ):
+                possibile = unquote(
+                    parametri[chiave][0]
+                )
+
+                dominio_possibile = urlparse(
+                    possibile
+                ).netloc.lower()
+
+                if "salute.gov.it" in dominio_possibile:
+                    indirizzo = possibile
+
+                    elementi = urlparse(
+                        indirizzo
+                    )
+
+                    break
+
+        if (
+            "salute.gov.it"
+            not in elementi.netloc.lower()
+        ):
+            continue
+
+        return urlunparse(
+            (
+                elementi.scheme or "https",
+                elementi.netloc.lower(),
+                elementi.path,
+                "",
+                "",
+                "",
+            )
+        )
+
+    return ""
+
+
+def estrai_data_pubblicazione(entry):
+    struttura = (
         entry.get("published_parsed")
         or entry.get("updated_parsed")
     )
 
-    if struttura_data:
+    if struttura:
         data = datetime(
-            struttura_data.tm_year,
-            struttura_data.tm_mon,
-            struttura_data.tm_mday,
-            struttura_data.tm_hour,
-            struttura_data.tm_min,
-            struttura_data.tm_sec,
+            struttura.tm_year,
+            struttura.tm_mon,
+            struttura.tm_mday,
+            struttura.tm_hour,
+            struttura.tm_min,
+            struttura.tm_sec,
             tzinfo=timezone.utc,
         )
 
         return data.isoformat()
 
-    data_testuale = (
+    valore = (
         entry.get("published")
         or entry.get("updated")
     )
 
-    if not data_testuale:
+    if not valore:
         return None
 
     data = dateparser.parse(
-        data_testuale,
+        valore,
         languages=[
             "it",
             "en",
@@ -489,13 +569,11 @@ def estrai_data_pubblicazione(entry):
     return data.isoformat()
 
 
-def estrai_elementi_rss(entries):
-    """
-    Cerca nel feed le notizie relative
-    alla Ricerca Finalizzata.
-    """
-
-    candidati = []
+def estrai_candidati(
+    entries,
+    origine,
+):
+    risultati = []
     url_visti = set()
 
     for entry in entries:
@@ -516,75 +594,67 @@ def estrai_elementi_rss(entries):
             )
         )
 
-        collegamento = normalizza_url(
-            entry.get(
-                "link",
-                "",
-            ),
-            FEED_RSS,
-        )
-
         testo_completo = (
             f"{titolo} {descrizione}"
         )
 
-        termini_trovati = trova_termini(
+        termini = trova_termini(
             testo_completo,
             TERMINI_RICERCA_FINALIZZATA,
         )
 
-        if not termini_trovati:
+        if not termini:
             continue
 
-        if not collegamento:
+        url = estrai_url_ufficiale(
+            entry
+        )
+
+        if not url:
             continue
 
-        if collegamento in url_visti:
+        if url in url_visti:
             continue
 
         url_visti.add(
-            collegamento
+            url
         )
 
-        candidati.append(
+        risultati.append(
             {
                 "fonte": FONTE,
                 "titolo": titolo,
-                "descrizione_rss": descrizione,
-                "url": collegamento,
+                "descrizione_rss": (
+                    descrizione
+                ),
+                "url": url,
                 "data_pubblicazione": (
                     estrai_data_pubblicazione(
                         entry
                     )
                 ),
                 "termini_ricerca_finalizzata": (
-                    termini_trovati
+                    termini
                 ),
-                "origine_rilevazione": (
-                    "feed_rss_ufficiale"
-                ),
+                "origine_rilevazione": origine,
             }
         )
 
-    candidati.sort(
+    risultati.sort(
         key=lambda elemento: (
             elemento.get(
                 "data_pubblicazione"
             )
             or "",
-            elemento["titolo"].lower(),
+            elemento["titolo"],
         ),
         reverse=True,
     )
 
-    return candidati
+    return risultati
 
 
 def estrai_testo_principale(html):
-    """
-    Estrae il testo principale da una pagina HTML.
-    """
-
     soup = BeautifulSoup(
         html,
         "html.parser",
@@ -619,89 +689,29 @@ def estrai_testo_principale(html):
     )
 
 
-def estrai_stringhe_data(testo):
-    """
-    Estrae le possibili date presenti nel testo.
-    """
-
-    risultati = []
-
-    for schema in SCHEMI_DATA:
-        for corrispondenza in re.finditer(
-            schema,
-            testo,
-            flags=re.IGNORECASE,
-        ):
-            valore = pulisci_testo(
-                corrispondenza.group(0)
-            )
-
-            if valore not in risultati:
-                risultati.append(
-                    valore
-                )
-
-    return risultati
-
-
-def calcola_punteggio_deadline(contesto):
-    """
-    Assegna un punteggio al contesto
-    di una possibile deadline.
-    """
-
-    testo = normalizza_testo(
-        contesto
+def scarica_pagina_html(
+    sessione,
+    url,
+):
+    contenuto = scarica_contenuto(
+        sessione,
+        url,
     )
 
-    punteggio = 0
+    indicatori = trova_indicatori_blocco(
+        contenuto
+    )
 
-    criteri_positivi = {
-        "scadenza per la presentazione": 50,
-        "termine per la presentazione": 50,
-        "scadenza presentazione": 45,
-        "presentazione delle proposte": 30,
-        "presentazione dei progetti": 30,
-        "presentazione delle domande": 30,
-        "termine ultimo": 35,
-        "entro e non oltre": 35,
-        "submission deadline": 40,
-        "deadline": 30,
-        "scadenza": 20,
-        "presentazione": 10,
-        "submission": 10,
-    }
+    if indicatori:
+        raise RuntimeError(
+            "Pagina ufficiale bloccata: "
+            + ", ".join(indicatori)
+        )
 
-    criteri_negativi = {
-        "pubblicazione": -15,
-        "aggiornato": -20,
-        "graduatoria": -30,
-        "finanziati": -30,
-        "risultati": -20,
-        "esiti": -20,
-        "avvio": -15,
-        "webinar": -20,
-    }
-
-    for criterio, valore in criteri_positivi.items():
-        if criterio in testo:
-            punteggio += valore
-
-    for criterio, valore in criteri_negativi.items():
-        if criterio in testo:
-            punteggio += valore
-
-    return punteggio
+    return contenuto
 
 
 def interpreta_data(stringa_data):
-    """
-    Converte una data testuale in datetime.
-
-    Se non è presente un orario,
-    utilizza la fine della giornata.
-    """
-
     contiene_orario = bool(
         re.search(
             r"\b\d{1,2}[:.]\d{2}\b",
@@ -709,7 +719,7 @@ def interpreta_data(stringa_data):
         )
     )
 
-    stringa_pulita = (
+    stringa_pulita = pulisci_testo(
         stringa_data.replace(
             "(",
             " ",
@@ -717,10 +727,6 @@ def interpreta_data(stringa_data):
             ")",
             " ",
         )
-    )
-
-    stringa_pulita = pulisci_testo(
-        stringa_pulita
     )
 
     data = dateparser.parse(
@@ -757,22 +763,61 @@ def interpreta_data(stringa_data):
     return data
 
 
-def estrai_deadline(testo):
-    """
-    Cerca la deadline di presentazione più affidabile.
-    """
+def calcola_punteggio_deadline(contesto):
+    testo = normalizza_testo(
+        contesto
+    )
 
+    criteri_positivi = {
+        "scadenza per la presentazione": 50,
+        "termine per la presentazione": 50,
+        "scadenza presentazione": 45,
+        "presentazione delle proposte": 30,
+        "presentazione dei progetti": 30,
+        "presentazione delle domande": 30,
+        "termine ultimo": 35,
+        "entro e non oltre": 35,
+        "submission deadline": 40,
+        "deadline": 30,
+        "scadenza": 20,
+        "presentazione": 10,
+    }
+
+    criteri_negativi = {
+        "pubblicazione": -15,
+        "aggiornato": -20,
+        "graduatoria": -30,
+        "finanziati": -30,
+        "risultati": -20,
+        "esiti": -20,
+        "webinar": -20,
+    }
+
+    punteggio = 0
+
+    for criterio, valore in criteri_positivi.items():
+        if criterio in testo:
+            punteggio += valore
+
+    for criterio, valore in criteri_negativi.items():
+        if criterio in testo:
+            punteggio += valore
+
+    return punteggio
+
+
+def estrai_deadline(testo):
     candidati = []
 
     for schema_data in SCHEMI_DATA:
-        schema_contesto = re.compile(
+        schema = re.compile(
             r"(.{0,220}"
             + schema_data
             + r".{0,220})",
             flags=re.IGNORECASE,
         )
 
-        for corrispondenza in schema_contesto.finditer(
+        for corrispondenza in schema.finditer(
             testo
         ):
             contesto = pulisci_testo(
@@ -787,31 +832,34 @@ def estrai_deadline(testo):
             if not termini_submission:
                 continue
 
-            stringhe_data = estrai_stringhe_data(
-                contesto
-            )
+            for schema_singolo in SCHEMI_DATA:
+                for data_match in re.finditer(
+                    schema_singolo,
+                    contesto,
+                    flags=re.IGNORECASE,
+                ):
+                    stringa_data = pulisci_testo(
+                        data_match.group(0)
+                    )
 
-            for stringa_data in stringhe_data:
-                data = interpreta_data(
-                    stringa_data
-                )
+                    data = interpreta_data(
+                        stringa_data
+                    )
 
-                if data is None:
-                    continue
+                    if data is None:
+                        continue
 
-                candidati.append(
-                    {
-                        "data": data,
-                        "stringa_data": (
-                            stringa_data
-                        ),
-                        "punteggio": (
-                            calcola_punteggio_deadline(
-                                contesto
-                            )
-                        ),
-                    }
-                )
+                    candidati.append(
+                        {
+                            "data": data,
+                            "testo": stringa_data,
+                            "punteggio": (
+                                calcola_punteggio_deadline(
+                                    contesto
+                                )
+                            ),
+                        }
+                    )
 
     if not candidati:
         return None
@@ -834,7 +882,7 @@ def estrai_deadline(testo):
             migliore["data"].isoformat()
         ),
         "deadline_testo": (
-            migliore["stringa_data"]
+            migliore["testo"]
         ),
         "deadline_affidabilita": (
             migliore["punteggio"]
@@ -843,17 +891,12 @@ def estrai_deadline(testo):
 
 
 def valuta_deadline(deadline_iso):
-    """
-    Verifica se la deadline è futura.
-    """
-
     if not deadline_iso:
         return {
             "submission_aperta": None,
             "stato_submission": (
                 "deadline_non_verificata"
             ),
-            "giorni_residui": None,
         }
 
     try:
@@ -867,7 +910,6 @@ def valuta_deadline(deadline_iso):
             "stato_submission": (
                 "deadline_non_valida"
             ),
-            "giorni_residui": None,
         }
 
     if deadline.tzinfo is None:
@@ -875,46 +917,25 @@ def valuta_deadline(deadline_iso):
             tzinfo=FUSO_ORARIO_ITALIA
         )
 
-    differenza = (
+    if (
         deadline.astimezone(timezone.utc)
-        - datetime.now(timezone.utc)
-    )
-
-    secondi = differenza.total_seconds()
-
-    if secondi <= 0:
+        <= datetime.now(timezone.utc)
+    ):
         return {
             "submission_aperta": False,
             "stato_submission": "scaduta",
-            "giorni_residui": 0,
         }
-
-    giorni = int(
-        secondi // 86400
-    )
-
-    if secondi % 86400:
-        giorni += 1
 
     return {
         "submission_aperta": True,
         "stato_submission": "aperta",
-        "giorni_residui": giorni,
     }
 
 
-def verifica_candidato_html(
+def verifica_candidato(
     sessione,
     candidato,
 ):
-    """
-    Prova a verificare la notizia RSS
-    aprendo la pagina collegata.
-
-    Se Gcore blocca la pagina, il candidato
-    viene conservato come verifica bloccata.
-    """
-
     try:
         html = scarica_pagina_html(
             sessione,
@@ -927,158 +948,144 @@ def verifica_candidato_html(
     ) as errore:
         return {
             **candidato,
-            "stato_verifica": (
-                "verifica_bloccata"
+            "stato_ver**ica": (
+                "fonte_uf**ciale_non_accessibile"
+          **),
+            "motivo_verifica":**tr(errore),
+            "rilevanz**: (
+                "bando_genera**_da_verificare"
             ),
-            "motivo_verifica": str(errore),
-            "rilevanza": (
-                "bando_generale_da_verificare"
+  **        "parole_chiave_oncologich**: [],
+            "submission_ape**a": None,
+            "stato_subm**sion": (
+                "non_ver**icato"
             ),
-            "parole_chiave_oncologiche": [],
-            "submission_aperta": None,
-            "stato_submission": (
-                "non_verificato"
-            ),
-            "deadline": None,
-            "deadline_testo": None,
+           **deadline": None,
+            "dea**ine_testo": None,
         }
 
-    testo = estrai_testo_principale(
-        html
+    **sto = estrai_testo_principale(
+  **    html
     )
 
-    testo_completo = (
+    testo_complet**= (
         f"{candidato['titolo']} "
         f"{candidato['descrizione_rss']} "
         f"{testo}"
-    )
+   **
 
-    indicatori_chiusura = trova_termini(
+    parole_oncologiche = trova_**rmini(
         testo_completo,
-        TERMINI_CHIUSURA,
+  **    TERMINI_ONCOLOGICI,
     )
 
-    parole_oncologiche = trova_termini(
+  **indicatori_chiusura = trova_termi**(
         testo_completo,
-        TERMINI_ONCOLOGICI,
+       **ERMINI_CHIUSURA,
     )
 
-    informazioni_deadline = estrai_deadline(
-        testo_completo
-    )
-
-    if indicatori_chiusura:
-        return {
-            **candidato,
-            "stato_verifica": "confermato",
-            "rilevanza": (
-                "oncologica"
-                if parole_oncologiche
-                else "bando_generale"
+    if in**catori_chiusura:
+        return {**           **candidato,
+         ** "stato_verifica": "confermato",
+**          "rilevanza": (
+        **      "oncologica"
+              **if parole_oncologiche
+           **   else "bando_generale"
+        **  ),
+            "parole_chiave_o**ologiche": (
+                paro**_oncologiche
             ),
-            "parole_chiave_oncologiche": (
-                parole_oncologiche
-            ),
-            "submission_aperta": False,
-            "stato_submission": (
-                "dichiarata_conclusa"
-            ),
-            "indicatori_chiusura": (
-                indicatori_chiusura
-            ),
-            "deadline": None,
-            "deadline_testo": None,
+     **     "submission_aperta": False,
+**          "stato_submission": (
+ **             "dichiarata_conclusa**            ),
+            "deadl**e": None,
+            "deadline_t**to": None,
         }
 
-    if informazioni_deadline:
-        valutazione = valuta_deadline(
-            informazioni_deadline[
+    informa**oni_deadline = estrai_deadline(
+ **     testo_completo
+    )
+
+    if**nformazioni_deadline:
+        val**azione = valuta_deadline(
+       **   informazioni_deadline[
                 "deadline"
             ]
-        )
+ **     )
 
         return {
-            **candidato,
-            "stato_verifica": "confermato",
-            "rilevanza": (
-                "oncologica"
-                if parole_oncologiche
-                else "bando_generale"
+        **  **candidato,
+            "stato**erifica": "confermato",
+         ** "rilevanza": (
+                "**cologica"
+                if paro**_oncologiche
+                else**bando_generale"
             ),
-            "parole_chiave_oncologiche": (
-                parole_oncologiche
+  **        "parole_chiave_oncologich**: (
+                parole_oncolo**che
             ),
-            "submission_aperta": (
-                valutazione[
-                    "submission_aperta"
-                ]
-            ),
-            "stato_submission": (
-                valutazione[
-                    "stato_submission"
-                ]
-            ),
-            "deadline": (
-                informazioni_deadline[
-                    "deadline"
-                ]
-            ),
-            "deadline_testo": (
-                informazioni_deadline[
-                    "deadline_testo"
-                ]
-            ),
-            "deadline_affidabilita": (
-                informazioni_deadline[
-                    "deadline_affidabilita"
-                ]
-            ),
+            ****lutazione,
+            **informaz**ni_deadline,
         }
 
-    return {
+    retur**{
         **candidato,
-        "stato_verifica": (
-            "pagina_accessibile_deadline_non_rilevata"
+        "s**to_verifica": (
+            "pagi**_accessibile_"
+            "deadl**e_non_rilevata"
         ),
-        "rilevanza": (
-            "oncologica"
-            if parole_oncologiche
-            else "bando_generale_da_verificare"
+      **"rilevanza": (
+            "oncol**ica"
+            if parole_oncolo**che
+            else "bando_gener**e_da_verificare"
         ),
-        "parole_chiave_oncologiche": (
-            parole_oncologiche
+     ** "parole_chiave_oncologiche": (
+ **         parole_oncologiche
+     ** ),
+        "submission_aperta": **ne,
+        "stato_submission": (**           "deadline_non_verifica**"
         ),
-        "submission_aperta": None,
-        "stato_submission": (
-            "deadline_non_verificata"
-        ),
-        "deadline": None,
-        "deadline_testo": None,
+        "deadline": **ne,
+        "deadline_testo": Non**
     }
 
 
-def seleziona_risultati_da_archiviare(
-    candidati_verificati,
-):
-    """
-    Conserva:
+def carica_precedenti():**   if not OUTPUT_FILE.exists():
+ **     return []
 
-    - bandi confermati con submission aperta;
-    - candidati con verifica bloccata;
-    - candidati con deadline non verificata.
+    try:
+        **th OUTPUT_FILE.open(
+            **",
+            encoding="utf-8",
+**      ) as file:
+            dati** json.load(
+                file
+**          )
 
-    Esclude bandi confermati come scaduti
-    o dichiarati conclusi.
-    """
-
-    risultati = []
-
-    for candidato in candidati_verificati:
-        stato_submission = candidato.get(
-            "stato_submission"
+        calls = dati**et(
+            "calls",
+        **  [],
         )
 
-        if stato_submission in {
+        if isins**nce(calls, list):
+            ret**n calls
+
+        return []
+
+    except (
+        OSError,
+        json.JSONDecodeError,
+    ):
+        return []
+
+
+def seleziona_attivi(candidati):
+    risultati = []
+
+    for candidato in candidati:
+        if candidato.get(
+            "stato_submission"
+        ) in {
             "scaduta",
             "dichiarata_conclusa",
         }:
@@ -1088,134 +1095,36 @@ def seleziona_risultati_da_archiviare(
             candidato
         )
 
-    risultati.sort(
-        key=lambda elemento: (
-            elemento.get(
-                "data_pubblicazione"
-            )
-            or "",
-            elemento.get(
-                "titolo",
-                "",
-            ).lower(),
-        ),
-        reverse=True,
-    )
-
     return risultati
 
 
-def carica_risultati_precedenti():
-    """
-    Legge l'archivio precedente.
-    """
-
-    if not OUTPUT_FILE.exists():
-        print(
-            "Nessun archivio precedente "
-            "Ricerca Finalizzata trovato."
-        )
-
-        return []
-
-    try:
-        with OUTPUT_FILE.open(
-            "r",
-            encoding="utf-8",
-        ) as file:
-            dati = json.load(
-                file
-            )
-
-        risultati = dati.get(
-            "calls",
-            [],
-        )
-
-        if not isinstance(
-            risultati,
-            list,
-        ):
-            return []
-
-        print(
-            "Risultati nell'archivio precedente: "
-            f"{len(risultati)}"
-        )
-
-        return risultati
-
-    except (
-        OSError,
-        json.JSONDecodeError,
-    ) as errore:
-        print(
-            "Impossibile leggere "
-            "l'archivio precedente: "
-            f"{errore}"
-        )
-
-        return []
-
-
-def identifica_nuovi_risultati(
+def confronta(
     precedenti,
     correnti,
 ):
-    """
-    Identifica i nuovi risultati in base all'URL.
-    """
-
-    url_precedenti = {
-        elemento.get("url")
-        for elemento in precedenti
-        if elemento.get("url")
-    }
-
-    return [
-        elemento
-        for elemento in correnti
-        if elemento.get("url")
-        not in url_precedenti
-    ]
-
-
-def identifica_risultati_rimossi(
-    precedenti,
-    correnti,
-):
-    """
-    Identifica i risultati non più presenti.
-    """
-
-    url_correnti = {
-        elemento.get("url")
-        for elemento in correnti
-        if elemento.get("url")
-    }
-
-    return [
-        elemento
-        for elemento in precedenti
-        if elemento.get("url")
-        and elemento.get("url")
-        not in url_correnti
-    ]
-
-
-def identifica_risultati_modificati(
-    precedenti,
-    correnti,
-):
-    """
-    Identifica modifiche ai campi stabili.
-    """
-
     precedenti_per_url = {
         elemento.get("url"): elemento
         for elemento in precedenti
         if elemento.get("url")
     }
+
+    correnti_per_url = {
+        elemento.get("url"): elemento
+        for elemento in correnti
+        if elemento.get("url")
+    }
+
+    nuovi = [
+        elemento
+        for url, elemento in correnti_per_url.items()
+        if url not in precedenti_per_url
+    ]
+
+    rimossi = [
+        elemento
+        for url, elemento in precedenti_per_url.items()
+        if url not in correnti_per_url
+    ]
 
     campi = [
         "titolo",
@@ -1228,9 +1137,9 @@ def identifica_risultati_modificati(
 
     modificati = []
 
-    for corrente in correnti:
+    for url, corrente in correnti_per_url.items():
         precedente = precedenti_per_url.get(
-            corrente.get("url")
+            url
         )
 
         if not precedente:
@@ -1246,78 +1155,54 @@ def identifica_risultati_modificati(
         if campi_modificati:
             modificati.append(
                 {
-                    "titolo": corrente.get(
-                        "titolo",
-                        "Titolo non disponibile",
-                    ),
-                    "url": corrente.get(
-                        "url",
-                        "",
-                    ),
+                    "titolo": corrente[
+                        "titolo"
+                    ],
+                    "url": url,
                     "campi_modificati": (
                         campi_modificati
                     ),
                 }
             )
 
-    return modificati
+    return (
+        nuovi,
+        rimossi,
+        modificati,
+    )
 
 
 def salva_risultati(
     risultati,
-    numero_elementi_feed,
-    numero_candidati_rss,
+    canale,
+    fonti_feed,
+    totale_elementi,
+    totale_candidati,
 ):
-    """
-    Salva il risultato del controllo RSS.
-
-    Zero risultati indica che il feed corrente
-    non contiene segnalazioni pertinenti.
-    """
-
     OUTPUT_FILE.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    confermati_aperti = sum(
-        elemento.get("submission_aperta")
-        is True
-        for elemento in risultati
-    )
-
-    verifiche_bloccate = sum(
-        elemento.get("stato_verifica")
-        == "verifica_bloccata"
-        for elemento in risultati
-    )
-
     dati = {
         "fonte": FONTE,
-        "feed_rss": FEED_RSS,
+        "canale_utilizzato": canale,
+        "fonti_feed": fonti_feed,
         "criterio": (
             "allerta Ricerca Finalizzata, "
             "pertinenza oncologica e deadline"
         ),
-        "monitoraggio_rss_completato": True,
         "nota": (
-            "L'assenza di risultati indica che "
-            "nel feed RSS corrente non sono state "
-            "trovate segnalazioni pertinenti. "
-            "Non certifica l'assenza assoluta "
-            "di bandi sul portale."
+            "I risultati del motore di ricerca "
+            "sono segnalazioni verso pagine ufficiali "
+            "salute.gov.it e non bandi confermati "
+            "finché la pagina ufficiale non è accessibile."
         ),
         "totale_elementi_feed": (
-            numero_elementi_feed
+            totale_elementi
         ),
-        "totale_candidati_rss": (
-            numero_candidati_rss
-        ),
-        "totale_confermati_aperti": (
-            confermati_aperti
-        ),
-        "totale_verifiche_bloccate": (
-            verifiche_bloccate
+        "totale_candidati": (
+            totale_candidati
         ),
         "numero_risultati": len(
             risultati
@@ -1339,47 +1224,13 @@ def salva_risultati(
         file.write("\n")
 
 
-def formatta_deadline(deadline_iso):
-    """
-    Converte una deadline ISO in formato leggibile.
-    """
-
-    if not deadline_iso:
-        return "non verificata"
-
-    try:
-        deadline = datetime.fromisoformat(
-            deadline_iso
-        )
-
-    except ValueError:
-        return deadline_iso
-
-    if deadline.tzinfo is None:
-        deadline = deadline.replace(
-            tzinfo=FUSO_ORARIO_ITALIA
-        )
-
-    return deadline.astimezone(
-        FUSO_ORARIO_ITALIA
-    ).strftime(
-        "%d/%m/%Y alle %H:%M %Z"
-    )
-
-
-def aggiungi_riepilogo_github(
+def aggiungi_riepilogo(
     risultati,
-    candidati_rss,
     nuovi,
     rimossi,
     modificati,
-    numero_elementi_feed,
+    canale,
 ):
-    """
-    Aggiunge il riepilogo alla pagina Summary
-    dell'esecuzione GitHub Actions.
-    """
-
     percorso = os.environ.get(
         "GITHUB_STEP_SUMMARY"
     )
@@ -1387,46 +1238,17 @@ def aggiungi_riepilogo_github(
     if not percorso:
         return
 
-    confermati_aperti = [
-        elemento
-        for elemento in risultati
-        if elemento.get("submission_aperta")
-        is True
-    ]
-
-    verifiche_bloccate = [
-        elemento
-        for elemento in risultati
-        if elemento.get("stato_verifica")
-        == "verifica_bloccata"
-    ]
-
     righe = [
         "# Ricerca Finalizzata",
         "",
         (
-            "Canale controllato: "
-            "**feed RSS ufficiale del Ministero**"
+            "Canale utilizzato: "
+            f"**{canale}**"
         ),
         "",
         (
-            "Elementi presenti nel feed: "
-            f"**{numero_elementi_feed}**"
-        ),
-        "",
-        (
-            "Notizie candidate: "
-            f"**{len(candidati_rss)}**"
-        ),
-        "",
-        (
-            "Bandi confermati con submission aperta: "
-            f"**{len(confermati_aperti)}**"
-        ),
-        "",
-        (
-            "Candidati con verifica bloccata: "
-            f"**{len(verifiche_bloccate)}**"
+            "Risultati correnti: "
+            f"**{len(risultati)}**"
         ),
         "",
         (
@@ -1449,68 +1271,30 @@ def aggiungi_riepilogo_github(
     if risultati:
         righe.extend(
             [
-                "## Risultati correnti",
+                "## Segnalazioni correnti",
                 "",
             ]
         )
 
         for risultato in risultati:
-            titolo = risultato.get(
-                "titolo",
-                "Titolo non disponibile",
+            righe.append(
+                f"- [{risultato['titolo']}]"
+                f"({risultato['url']})"
             )
-
-            url = risultato.get(
-                "url",
-                "",
-            )
-
-            stato_verifica = risultato.get(
-                "stato_verifica",
-                "non disponibile",
-            )
-
-            rilevanza = risultato.get(
-                "rilevanza",
-                "non disponibile",
-            )
-
-            stato_submission = risultato.get(
-                "stato_submission",
-                "non verificato",
-            )
-
-            deadline = formatta_deadline(
-                risultato.get("deadline")
-            )
-
-            if url:
-                righe.append(
-                    f"- {url}"
-                )
-            else:
-                righe.append(
-                    f"- {titolo}"
-                )
 
             righe.append(
                 "  - Stato verifica: "
-                f"**{stato_verifica}**"
+                f"**{risultato['stato_verifica']}**"
             )
 
             righe.append(
                 "  - Rilevanza: "
-                f"**{rilevanza}**"
+                f"**{risultato['rilevanza']}**"
             )
 
             righe.append(
-                "  - Stato submission: "
-                f"**{stato_submission}**"
-            )
-
-            righe.append(
-                "  - Deadline: "
-                f"**{deadline}**"
+                "  - Submission: "
+                f"**{risultato['stato_submission']}**"
             )
 
         righe.append("")
@@ -1518,125 +1302,8 @@ def aggiungi_riepilogo_github(
     else:
         righe.extend(
             [
-                (
-                    "Nessuna nuova segnalazione relativa "
-                    "alla Ricerca Finalizzata è presente "
-                    "nel feed RSS corrente."
-                ),
-                "",
-            ]
-        )
-
-    if nuovi:
-        righe.extend(
-            [
-                "## Nuovi risultati",
-                "",
-            ]
-        )
-
-        for risultato in nuovi:
-            titolo = risultato.get(
-                "titolo",
-                "Titolo non disponibile",
-            )
-
-            url = risultato.get(
-                "url",
-                "",
-            )
-
-            if url:
-                righe.append(
-                    f"- {url}"
-                )
-            else:
-                righe.append(
-                    f"- {titolo}"
-                )
-
-        righe.append("")
-
-    if modificati:
-        righe.extend(
-            [
-                "## Risultati modificati",
-                "",
-            ]
-        )
-
-        for risultato in modificati:
-            titolo = risultato.get(
-                "titolo",
-                "Titolo non disponibile",
-            )
-
-            url = risultato.get(
-                "url",
-                "",
-            )
-
-            campi_modificati = ", ".join(
-                risultato.get(
-                    "campi_modificati",
-                    [],
-                )
-            )
-
-            if url:
-                righe.append(
-                    f"- {url}: "
-                    f"{campi_modificati}"
-                )
-            else:
-                righe.append(
-                    f"- {titolo}: "
-                    f"{campi_modificati}"
-                )
-
-        righe.append("")
-
-    if rimossi:
-        righe.extend(
-            [
-                "## Risultati non più presenti",
-                "",
-            ]
-        )
-
-        for risultato in rimossi:
-            titolo = risultato.get(
-                "titolo",
-                "Titolo non disponibile",
-            )
-
-            url = risultato.get(
-                "url",
-                "",
-            )
-
-            if url:
-                righe.append(
-                    f"- {url}"
-                )
-            else:
-                righe.append(
-                    f"- {titolo}"
-                )
-
-        righe.append("")
-
-    if (
-        not nuovi
-        and not modificati
-        and not rimossi
-    ):
-        righe.extend(
-            [
-                (
-                    "Nessuna variazione rispetto "
-                    "all'esecuzione precedente."
-                ),
+                "Nessuna segnalazione "
+                "pertinente rilevata.",
                 "",
             ]
         )
@@ -1648,19 +1315,14 @@ def aggiungi_riepilogo_github(
     ) as file:
         file.write(
             "\n".join(righe)
+            + "\n"
         )
-
-        file.write("\n")
 
 
 def stampa_risultati(risultati):
-    """
-    Stampa i risultati nel log.
-    """
-
     print()
     print(
-        "RISULTATI RSS RICERCA FINALIZZATA"
+        "RISULTATI RICERCA FINALIZZATA"
     )
 
     print(
@@ -1669,8 +1331,7 @@ def stampa_risultati(risultati):
 
     if not risultati:
         print(
-            "Nessuna segnalazione pertinente "
-            "nel feed RSS corrente."
+            "Nessuna segnalazione pertinente."
         )
 
         return
@@ -1698,31 +1359,26 @@ def stampa_risultati(risultati):
         )
 
         print(
-            "   Stato submission: "
+            "   Submission: "
             f"{risultato['stato_submission']}"
-        )
-
-        print(
-            "   Deadline: "
-            f"{formatta_deadline(risultato.get('deadline'))}"
         )
 
 
 def main():
-    """
-    Funzione principale.
-    """
-
     print("=" * 60)
 
     print(
-        "MONITORAGGIO RSS RICERCA FINALIZZATA"
+        "MONITORAGGIO RICERCA FINALIZZATA "
+        "CON FALLBACK"
     )
 
     print("=" * 60)
 
-    precedenti = (
-        carica_risultati_precedenti()
+    precedenti = carica_precedenti()
+
+    print(
+        "Risultati nell'archivio precedente: "
+        f"{len(precedenti)}"
     )
 
     sessione = crea_sessione()
@@ -1730,121 +1386,127 @@ def main():
     try:
         (
             entries,
-            titolo_feed,
-        ) = leggi_feed_rss(
+            fonti_feed,
+        ) = leggi_feed_ufficiale(
             sessione
+        )
+
+        canale = "feed_rss_ufficiale"
+
+        candidati = estrai_candidati(
+            entries,
+            canale,
         )
 
     except (
         requests.RequestException,
         RuntimeError,
-    ) as errore:
+    ) as errore_ufficiale:
         print(
-            "Errore durante il controllo RSS: "
-            f"{errore}"
+            "Feed ufficiale non disponibile: "
+            f"{errore_ufficiale}"
         )
 
-        print(
-            "Il precedente archivio non verrà "
-            "sovrascritto."
-        )
+        try:
+            (
+                entries,
+                fonti_feed,
+            ) = leggi_feed_bing(
+                sessione
+            )
 
-        raise SystemExit(1)
+            canale = (
+                "bing_news_rss_fallback"
+            )
+
+            candidati = estrai_candidati(
+                entries,
+                canale,
+            )
+
+        except (
+            requests.RequestException,
+            RuntimeError,
+        ) as errore_fallback:
+            print(
+                "Fallback non disponibile: "
+                f"{errore_fallback}"
+            )
+
+            print(
+                "Il precedente archivio "
+                "non verrà sovrascritto."
+            )
+
+            raise SystemExit(1)
 
     print(
-        f"Titolo del feed: {titolo_feed}"
-    )
-
-    candidati_rss = estrai_elementi_rss(
-        entries
+        f"Canale utilizzato: {canale}"
     )
 
     print(
-        "Candidati Ricerca Finalizzata "
-        f"trovati nel feed: {len(candidati_rss)}"
+        "Elementi complessivi ricevuti: "
+        f"{len(entries)}"
     )
 
-    candidati_verificati = []
+    print(
+        "Candidati ufficiali trovati: "
+        f"{len(candidati)}"
+    )
+
+    verificati = []
 
     for numero, candidato in enumerate(
-        candidati_rss,
+        candidati,
         start=1,
     ):
-        print()
-
         print(
-            f"Verifica candidato "
-            f"{numero}/{len(candidati_rss)}: "
+            f"Verifica {numero}/"
+            f"{len(candidati)}: "
             f"{candidato['titolo']}"
         )
 
-        verificato = verifica_candidato_html(
+        verificato = verifica_candidato(
             sessione,
             candidato,
         )
 
         print(
-            "  Stato verifica: "
+            "  Stato: "
             f"{verificato['stato_verifica']}"
         )
 
-        print(
-            "  Stato submission: "
-            f"{verificato['stato_submission']}"
-        )
-
-        candidati_verificati.append(
+        verificati.append(
             verificato
         )
 
-    risultati = (
-        seleziona_risultati_da_archiviare(
-            candidati_verificati
-        )
+    risultati = seleziona_attivi(
+        verificati
     )
 
-    nuovi = identifica_nuovi_risultati(
+    (
+        nuovi,
+        rimossi,
+        modificati,
+    ) = confronta(
         precedenti,
         risultati,
-    )
-
-    rimossi = identifica_risultati_rimossi(
-        precedenti,
-        risultati,
-    )
-
-    modificati = (
-        identifica_risultati_modificati(
-            precedenti,
-            risultati,
-        )
     )
 
     salva_risultati(
         risultati,
+        canale,
+        fonti_feed,
         len(entries),
-        len(candidati_rss),
+        len(candidati),
     )
 
-    aggiungi_riepilogo_github(
+    aggiungi_riepilogo(
         risultati,
-        candidati_rss,
         nuovi,
         rimossi,
         modificati,
-        len(entries),
-    )
-
-    print()
-
-    print(
-        "Elementi nel feed: "
-        f"{len(entries)}"
-    )
-
-    print(
-        "Candidati RSS: "
-        f"{len(candidati_rss)}"
+        canale,
     )
 
     print(
@@ -1878,7 +1540,7 @@ def main():
     print()
 
     print(
-        "Monitoraggio RSS Ricerca Finalizzata "
+        "Monitoraggio Ricerca Finalizzata "
         "completato correttamente."
     )
 
