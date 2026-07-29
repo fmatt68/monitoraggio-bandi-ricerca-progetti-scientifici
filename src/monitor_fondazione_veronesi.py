@@ -95,7 +95,11 @@ def normalizza_testo(testo):
     testo = unicodedata.normalize("NFKD", testo or "")
     testo = "".join(c for c in testo if not unicodedata.combining(c))
     return pulisci_testo(
-        testo.lower().replace("–", "-").replace("—", "-")
+        testo.lower()
+        .replace("–", "-")
+        .replace("—", "-")
+        .replace("’", "'")
+        .replace("‘", "'")
     )
 
 
@@ -152,14 +156,23 @@ def trova_termini(testo, termini):
 
 
 def estrai_link_bandi(html, pagina_base):
+    """
+    Estrae soltanto articoli che sembrano annunci di bando o fellowship.
+
+    Esclude pagine generiche, profili dei ricercatori e vecchi articoli
+    non utili al monitoraggio corrente.
+    """
+
     soup = BeautifulSoup(html, "html.parser")
     risultati = []
     visti = set()
+    anno_minimo = datetime.now(FUSO_ORARIO_ITALIA).year - 2
 
     for link in soup.find_all("a", href=True):
         testo_link = pulisci_testo(link.get_text(" ", strip=True))
         url = normalizza_url(link.get("href", ""), pagina_base)
         elementi = urlparse(url)
+        percorso_norm = normalizza_testo(elementi.path)
         testo_completo = normalizza_testo(f"{testo_link} {url}")
 
         if elementi.netloc not in {
@@ -169,7 +182,25 @@ def estrai_link_bandi(html, pagina_base):
         }:
             continue
 
-        if not any(normalizza_testo(termine) in testo_completo for termine in TERMINI_BANDO):
+        if elementi.netloc == "grant.fondazioneveronesi.it":
+            continue
+
+        if not elementi.path.startswith("/news/"):
+            continue
+
+        if not any(
+            parola in testo_completo
+            for parola in (
+                "bando",
+                "fellowship",
+                "borse post-dottorato",
+                "borse-post-dottorato",
+            )
+        ):
+            continue
+
+        anni = [int(anno) for anno in re.findall(r"20\d{2}", percorso_norm)]
+        if anni and max(anni) < anno_minimo:
             continue
 
         if url in visti:
@@ -284,26 +315,39 @@ def calcola_punteggio_deadline(contesto):
 
 
 def estrai_deadline(testo):
+    """
+    Estrae la scadenza della candidatura.
+
+    Dà priorità a formulazioni esplicite come:
+    - Candidature aperte fino al 17 luglio 2026
+    - C'e tempo fino al 17 luglio 2026
+    - Application deadline: 17 July 2026
+    """
+
+    testo_pulito = pulisci_testo(testo)
+
+    prefissi = (
+        r"candidature\s+aperte\s+fino\s+al|"
+        r"c['’]?e\s+tempo\s+fino\s+al|"
+        r"ce\s+tempo\s+fino\s+al|"
+        r"termine\s+per\s+le\s+candidature|"
+        r"scadenza\s+(?:delle\s+)?candidature|"
+        r"application\s+deadline|"
+        r"applications\s+must\s+be\s+submitted\s+by"
+    )
+
     candidati = []
 
     for schema_data in SCHEMI_DATA:
-        schema = re.compile(r"(.{0,220}" + schema_data + r".{0,220})", re.IGNORECASE)
-        for corrispondenza in schema.finditer(testo):
-            contesto = pulisci_testo(corrispondenza.group(1))
-            contesto_norm = normalizza_testo(contesto)
+        schema_diretto = re.compile(
+            rf"(?:{prefissi})\s*(?::|-)?\s*(?P<data>{schema_data})",
+            flags=re.IGNORECASE,
+        )
 
-            if not any(
-                parola in contesto_norm
-                for parola in ("candidatur", "deadline", "submit", "tempo fino")
-            ):
-                continue
-
-            data_match = re.search(schema_data, contesto, re.IGNORECASE)
-            if not data_match:
-                continue
-
-            stringa_data = pulisci_testo(data_match.group(0))
+        for corrispondenza in schema_diretto.finditer(testo_pulito):
+            stringa_data = pulisci_testo(corrispondenza.group("data"))
             data = interpreta_data(stringa_data)
+
             if data is None:
                 continue
 
@@ -311,14 +355,58 @@ def estrai_deadline(testo):
                 {
                     "data": data,
                     "testo": stringa_data,
-                    "punteggio": calcola_punteggio_deadline(contesto),
+                    "punteggio": 100,
                 }
             )
 
     if not candidati:
+        for schema_data in SCHEMI_DATA:
+            for data_match in re.finditer(
+                schema_data,
+                testo_pulito,
+                flags=re.IGNORECASE,
+            ):
+                inizio = max(0, data_match.start() - 100)
+                fine = min(len(testo_pulito), data_match.end() + 100)
+                contesto = pulisci_testo(testo_pulito[inizio:fine])
+                contesto_norm = normalizza_testo(contesto)
+
+                if not any(
+                    parola in contesto_norm
+                    for parola in (
+                        "candidatur",
+                        "deadline",
+                        "submit",
+                        "tempo fino",
+                    )
+                ):
+                    continue
+
+                stringa_data = pulisci_testo(data_match.group(0))
+                data = interpreta_data(stringa_data)
+
+                if data is None:
+                    continue
+
+                candidati.append(
+                    {
+                        "data": data,
+                        "testo": stringa_data,
+                        "punteggio": calcola_punteggio_deadline(contesto),
+                    }
+                )
+
+    if not candidati:
         return None
 
-    candidati.sort(key=lambda x: (x["punteggio"], x["data"]), reverse=True)
+    candidati.sort(
+        key=lambda elemento: (
+            elemento["punteggio"],
+            elemento["data"],
+        ),
+        reverse=True,
+    )
+
     migliore = candidati[0]
 
     if migliore["punteggio"] < 25:
