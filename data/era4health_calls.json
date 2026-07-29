@@ -1,0 +1,15 @@
+{
+  "fonte": "ERA4Health",
+  "pagina_monitorata": "https://era4health.eu/calls/",
+  "criterio": "oncologia e submission iniziale non scaduta",
+  "totale_pagine_candidate": 6,
+  "totale_pagine_accessibili": 6,
+  "totale_pagine_non_analizzabili": 0,
+  "totale_non_oncologiche": 3,
+  "totale_oncologia_esclusa": 1,
+  "totale_dichiarate_chiuse": 0,
+  "totale_scadute": 1,
+  "totale_deadline_non_rilevate": 1,
+  "numero_risultati": 0,
+  "calls": []
+}
