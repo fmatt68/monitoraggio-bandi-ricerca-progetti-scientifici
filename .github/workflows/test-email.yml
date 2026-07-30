@@ -3,6 +3,9 @@ name: Test manuale invio email da monitoraggio progetti scientifici
 on:
   workflow_dispatch:
 
+  schedule:
+  - cron: "17 */6 * * *"
+
 jobs:
   test-email:
     name: Test invio report email
