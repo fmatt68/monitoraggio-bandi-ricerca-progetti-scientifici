@@ -326,10 +326,26 @@ def estrai_deadline_full_application(testo):
 
 
 def estrai_round(testo):
+    """
+    Estrae soltanto round plausibili, per esempio 2025/26.
+
+    Scarta sequenze tecniche come 2024/10 che possono comparire nei
+    metadati, negli URL o nei dati strutturati della pagina.
+    """
+
+    for anno_iniziale, anno_finale in re.findall(
+        r"\b(20\d{2})/(\d{2})\b",
+        testo,
+    ):
+        anno_successivo = (int(anno_iniziale) + 1) % 100
+
+        if int(anno_finale) == anno_successivo:
+            return f"{anno_iniziale}/{anno_finale}"
+
     schemi = [
-        r"\b(20\d{2}/\d{2})\b",
         r"\b(20\d{2})\s+grant call\b",
         r"\bgrant call\s+(20\d{2})\b",
+        r"\bcall opens?.{0,80}?(20\d{2})\b",
     ]
 
     for schema in schemi:
@@ -338,6 +354,7 @@ def estrai_round(testo):
             testo,
             flags=re.IGNORECASE,
         )
+
         if corrispondenza:
             return corrispondenza.group(1)
 
@@ -350,6 +367,14 @@ def applica_fallback_ufficiale(
     deadline_info,
     stato_dichiarato,
 ):
+    """
+    Applica dati ufficiali circoscritti al round 2025/26.
+
+    Corregge anche il caso in cui la pagina esponga correttamente il giorno
+    ma il runner perda l'orario 17:00 GMT e interpreti la scadenza come fine
+    giornata.
+    """
+
     fallback = FALLBACK_UFFICIALI.get(
         codice
     )
@@ -368,21 +393,42 @@ def applica_fallback_ufficiale(
         round_call = fallback["round"]
         origine = "fallback_ufficiale_2025_26"
 
-    if deadline_info is None:
-        data = interpreta_data(
-            fallback["deadline"]
-        )
+    data_fallback = interpreta_data(
+        fallback["deadline"]
+    )
 
-        if data:
-            deadline_info = {
-                "deadline": data.isoformat(),
-                "deadline_testo": fallback["deadline"],
-                "deadline_etichetta": "fallback ufficiale",
-                "deadline_origine": (
-                    "fallback_ufficiale_2025_26"
-                ),
-            }
-            origine = "fallback_ufficiale_2025_26"
+    usa_deadline_fallback = deadline_info is None
+
+    if deadline_info is not None and data_fallback is not None:
+        try:
+            data_estratta = datetime.fromisoformat(
+                deadline_info["deadline"]
+            )
+        except (TypeError, ValueError):
+            usa_deadline_fallback = True
+        else:
+            stessa_data = (
+                data_estratta.date()
+                == data_fallback.date()
+            )
+            orario_fine_giornata = (
+                data_estratta.hour == 23
+                and data_estratta.minute == 59
+            )
+
+            if stessa_data and orario_fine_giornata:
+                usa_deadline_fallback = True
+
+    if usa_deadline_fallback and data_fallback is not None:
+        deadline_info = {
+            "deadline": data_fallback.isoformat(),
+            "deadline_testo": fallback["deadline"],
+            "deadline_etichetta": "fallback ufficiale",
+            "deadline_origine": (
+                "fallback_ufficiale_2025_26"
+            ),
+        }
+        origine = "fallback_ufficiale_2025_26"
 
     if stato_dichiarato == "non_determinato":
         stato_dichiarato = fallback["stato"]
