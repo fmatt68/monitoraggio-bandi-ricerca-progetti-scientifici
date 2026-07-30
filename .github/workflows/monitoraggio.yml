@@ -2,8 +2,9 @@ name: Monitoraggio bandi di ricerca oncologica
 
 on:
   workflow_dispatch:
+  
   schedule:
-    - cron: "0 6 * * 1-5"
+    - cron: "17 */6 * * *"
 
 permissions:
   contents: write
