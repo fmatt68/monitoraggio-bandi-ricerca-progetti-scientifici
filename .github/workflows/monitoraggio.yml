@@ -2,7 +2,6 @@ name: Monitoraggio bandi di ricerca oncologica
 
 on:
   workflow_dispatch:
-  
   schedule:
     - cron: "17 */6 * * *"
 
@@ -52,6 +51,7 @@ jobs:
           python -m py_compile src/monitor_era4health.py
           python -m py_compile src/monitor_fondazione_veronesi.py
           python -m py_compile src/monitor_airc.py
+          python -m py_compile src/monitor_wcrf.py
 
           echo "La sintassi di tutti gli script Python e valida."
 
@@ -150,6 +150,25 @@ jobs:
             echo "Monitoraggio AIRC completato."
           else
             echo "Avviso: monitoraggio AIRC non completato."
+            echo "L'archivio precedente, se presente, non viene sovrascritto."
+            echo "Gli altri monitor continueranno normalmente."
+          fi
+
+      - name: Esegue il monitoraggio World Cancer Research Fund
+        id: wcrf
+        continue-on-error: true
+        run: python src/monitor_wcrf.py
+
+      - name: Segnala lo stato di World Cancer Research Fund
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ steps.wcrf.outcome }}" = "success" ]; then
+            echo "Monitoraggio World Cancer Research Fund completato."
+          else
+            echo "Avviso: monitoraggio World Cancer Research Fund non completato."
             echo "L'archivio precedente, se presente, non viene sovrascritto."
             echo "Gli altri monitor continueranno normalmente."
           fi
@@ -256,6 +275,22 @@ jobs:
             echo "Questo non interrompe il workflow."
           fi
 
+      - name: Verifica archivio World Cancer Research Fund
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          file="data/wcrf_calls.json"
+
+          if [ -f "$file" ]; then
+            python -m json.tool "$file" > /dev/null
+            echo "Archivio World Cancer Research Fund presente e valido."
+          else
+            echo "Archivio World Cancer Research Fund non ancora disponibile."
+            echo "Questo non interrompe il workflow."
+          fi
+
       - name: Mostra il riepilogo complessivo
         shell: bash
         run: |
@@ -273,6 +308,7 @@ jobs:
               Path("data/era4health_calls.json"),
               Path("data/fondazione_veronesi_calls.json"),
               Path("data/airc_calls.json"),
+              Path("data/wcrf_calls.json"),
           ]
 
           print("=" * 70)
@@ -382,6 +418,10 @@ jobs:
             git add data/airc_calls.json
           fi
 
+          if [ -f "data/wcrf_calls.json" ]; then
+            git add data/wcrf_calls.json
+          fi
+
           if git diff --cached --quiet; then
             echo "Nessuna modifica da registrare."
             exit 0
@@ -408,6 +448,7 @@ jobs:
           STATO_ERA4HEALTH: ${{ steps.era4health.outcome }}
           STATO_FONDAZIONE_VERONESI: ${{ steps.fondazione_veronesi.outcome }}
           STATO_AIRC: ${{ steps.airc.outcome }}
+          STATO_WCRF: ${{ steps.wcrf.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REPOSITORY_NAME: ${{ github.repository }}
           RUN_NUMBER: ${{ github.run_number }}
@@ -469,6 +510,14 @@ jobs:
                   "file": Path("data/airc_calls.json"),
                   "stato_step": os.environ.get(
                       "STATO_AIRC",
+                      "non disponibile",
+                  ),
+              },
+              {
+                  "nome": "World Cancer Research Fund International",
+                  "file": Path("data/wcrf_calls.json"),
+                  "stato_step": os.environ.get(
+                      "STATO_WCRF",
                       "non disponibile",
                   ),
               },
