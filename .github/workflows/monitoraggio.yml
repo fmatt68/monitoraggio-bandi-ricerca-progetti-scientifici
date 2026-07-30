@@ -56,9 +56,11 @@ jobs:
           echo "La sintassi di tutti gli script Python e valida."
 
       - name: Esegue il monitoraggio oncologico EP PerMed
+        id: ep_permed
         run: python src/monitor.py
 
       - name: Esegue il monitoraggio EU Mission on Cancer
+        id: eu_mission_cancer
         run: python src/monitor_cancer_mission.py
 
       - name: Esegue il monitoraggio Ricerca Finalizzata
@@ -443,6 +445,8 @@ jobs:
         if: ${{ always() && github.event_name == 'schedule' }}
         shell: bash
         env:
+          STATO_EP_PERMED: ${{ steps.ep_permed.outcome }}
+          STATO_EU_MISSION_CANCER: ${{ steps.eu_mission_cancer.outcome }}
           STATO_RICERCA_FINALIZZATA: ${{ steps.ricerca_finalizzata.outcome }}
           STATO_WORLDWIDE_CANCER_RESEARCH: ${{ steps.worldwide_cancer_research.outcome }}
           STATO_ERA4HEALTH: ${{ steps.era4health.outcome }}
@@ -466,12 +470,18 @@ jobs:
               {
                   "nome": "EP PerMed",
                   "file": Path("data/ep_permed_calls.json"),
-                  "stato_step": "success",
+                  "stato_step": os.environ.get(
+                      "STATO_EP_PERMED",
+                      "non disponibile",
+                  ),
               },
               {
                   "nome": "EU Mission on Cancer",
                   "file": Path("data/eu_mission_cancer_calls.json"),
-                  "stato_step": "success",
+                  "stato_step": os.environ.get(
+                      "STATO_EU_MISSION_CANCER",
+                      "non disponibile",
+                  ),
               },
               {
                   "nome": "Ricerca Finalizzata",
