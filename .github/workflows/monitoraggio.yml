@@ -570,7 +570,7 @@ jobs:
 
               totale_attive += numero
 
-              if stato_step not in {"success", "skipped"}:
+              if stato_step != "success":
                   stato_visuale = f"Avviso: {stato_step}"
                   colore = "#b45309"
                   fonti_con_avvisi += 1
@@ -695,4 +695,3 @@ jobs:
           to: ${{ secrets.EMAIL_ADDRESS }}
           from: ${{ secrets.EMAIL_ADDRESS }}
           html_body: file://report-email.html
-
