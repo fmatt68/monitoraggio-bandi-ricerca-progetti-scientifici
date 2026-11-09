@@ -2,12 +2,31 @@
   "fonte": "EP PerMed",
   "pagina_monitorata": "https://www.eppermed.eu/funding-projects/calls/",
   "criterio": "oncologia e submission non scaduta",
-  "stato_indice": "nessuna_call_aperta_dichiarata",
-  "totale_pagine_candidate": 0,
+  "stato_indice": "call_aperte_analizzate",
+  "totale_pagine_candidate": 1,
   "totale_non_pertinenti": 0,
   "totale_call_scadute": 0,
   "totale_deadline_non_rilevate": 0,
   "totale_deadline_non_valide": 0,
-  "numero_risultati": 0,
-  "calls": []
+  "numero_risultati": 1,
+  "calls": [
+    {
+      "fonte": "EP PerMed",
+      "titolo": "EP PerMed Joint Transnational Call (JTC) 2027",
+      "url": "https://www.eppermed.eu/funding-projects/calls/jtc2027/",
+      "rilevanza": "oncologica",
+      "parole_chiave_oncologiche": [
+        "tumour"
+      ],
+      "parole_chiave_secondarie": [
+        "gene therapy",
+        "personalised medicine"
+      ],
+      "submission_aperta": true,
+      "stato_submission": "aperta",
+      "deadline": "2027-05-25T23:59:59+02:00",
+      "deadline_testo": "25 May 2027",
+      "deadline_affidabilita": 35
+    }
+  ]
 }
