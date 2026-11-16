@@ -24,9 +24,9 @@
       ],
       "submission_aperta": true,
       "stato_submission": "aperta",
-      "deadline": "2027-05-25T23:59:59+02:00",
-      "deadline_testo": "25 May 2027",
-      "deadline_affidabilita": 35
+      "deadline": "2027-05-25T08:00:00+02:00",
+      "deadline_testo": "May 25, 2027, 8:00",
+      "deadline_affidabilita": 40
     }
   ]
 }
